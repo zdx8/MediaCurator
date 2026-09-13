@@ -47,26 +47,30 @@
       </p>
 
       <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.0/MediaCurator-v1.0.0-arm64.zip">
+        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-arm64.zip">
           <span class="btn-title">下载 for Apple Silicon</span>
-          <span class="btn-sub">arm64 · 2.2 MB</span>
+          <span class="btn-sub">arm64 · 2.3 MB</span>
         </a>
-        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.0/MediaCurator-v1.0.0-universal.zip">
+        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-universal.zip">
           <span class="btn-title">下载通用版</span>
-          <span class="btn-sub">Intel + Apple Silicon · 3.3 MB</span>
+          <span class="btn-sub">Intel + Apple Silicon · 3.5 MB</span>
         </a>
       </div>
 
+      <p class="version-pill"><strong>v1.0.1</strong> · 整组决定改三态、跳过重复项只做按规则归档、修复并查集后摘要数量漂移</p>
+
       <ul class="hero-facts">
         <li><strong>macOS 14+</strong> 起</li>
-        <li><strong>四种</strong>重复／相似判定</li>
+        <li><strong>三种</strong>重复／相似判定</li>
+        <li><strong>三态</strong>整组决定</li>
         <li><strong>九种</strong>目录结构模板</li>
         <li><strong>可整体撤销</strong></li>
       </ul>
 
       <figure class="shot shot-hero">
         <img src="images/overview-light.png" width="1800" height="1138" alt="影像管家主界面：左侧是五步工作流导航，右侧是重复项审阅页，显示分组的重复文件与可释放空间。">
-        <figcaption>重复项页：每组都会给出保留建议与理由，可逐组确认或整组保留</figcaption>
+        <figcaption>重复项页：每组的整组决定是三态的 ——
+          <strong>按选择 / 整组保留 / 都不保留</strong>，切换时与顶部摘要联动</figcaption>
       </figure>
     </div>
   </section>
@@ -117,17 +121,30 @@
             <h3>重复项</h3>
             <p>按「精确重复 / 相似图片 / 相似视频」分组，每组给出保留建议和<strong>具体理由</strong>
                （分辨率最高、时间戳最可信、体积最大…）。点缩略图可放大比对；
-               保留项<strong>可以多选</strong> —— 连拍里挑中的两张、同一段视频的横竖两版都能留下，
-               也可以一键<strong>整组保留</strong>。</p>
+               保留项<strong>可以多选</strong> —— 连拍里挑中的两张、同一段视频的横竖两版都能留下。</p>
+            <p>卡片右上角的整组决定是<strong>三态</strong>：
+               <strong class="text-pos">保留整组</strong>（绿色描边）让该组不产生任何清理；
+               <strong class="text-neg">都不保留</strong>（红色描边）把本组全部成员移入系统回收站（仍可撤销找回）；
+               <strong class="text-mute">按选择</strong> 是默认 —— 只清掉你没勾选的几份。
+               切换会与顶部摘要联动，跨章节也始终一致。</p>
+            <p>旁边还有一个 <strong>「跳过重复项，只做归档」</strong> ——
+               不清理任何重复副本，只按「整理规则」页的模板把文件归档到目标目录。
+               只想整理目录结构、暂时不碰重复文件时走这条路。</p>
           </div>
           <figure class="shot">
             <img src="images/duplicates.png" width="1400" height="925" alt="重复项页：重复组卡片，每个成员显示分辨率、体积、拍摄时间与来源，右下角有「保留」勾选项，并可勾选多个。" loading="lazy">
             <figcaption>每个成员右下角是「保留」勾选，想留几份就勾几份</figcaption>
           </figure>
-          <figure class="shot">
-            <img src="images/duplicates-keep-whole.png" width="1400" height="925" alt="开启「保留整组」后的效果：整组卡片描边转为绿色，勾选项隐藏，并显示整组保留的说明。" loading="lazy">
-            <figcaption>点卡片右上角的「保留整组」，整组就不再产生任何清理操作</figcaption>
-          </figure>
+          <div class="shot-pair shot-pair-tight">
+            <figure class="shot">
+              <img src="images/duplicates-keep-whole.png" width="1400" height="925" alt="整组「保留整组」后：整组卡片描边转绿，勾选项隐藏，并显示整组保留的说明。" loading="lazy">
+              <figcaption>「保留整组」：该组不再产生清理操作</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="images/duplicates-discard-all.png" width="1400" height="925" alt="整组「都不保留」后：整组卡片描边转红，组内全部成员都纳入清理。" loading="lazy">
+              <figcaption>「都不保留」：本组全部成员移入回收站</figcaption>
+            </figure>
+          </div>
         </li>
 
         <li>
@@ -138,7 +155,7 @@
                方向键在组内翻页。视频直接内嵌播放器。</p>
           </div>
           <figure class="shot">
-            <img src="images/preview-image.jpg" width="1400" height="925" alt="放大预览浮层：图片放大到 196%，顶部有翻页与缩放控件，底部显示分辨率、体积、拍摄时间与设备。" loading="lazy">
+            <img src="images/preview-image.png" width="1400" height="925" alt="放大预览浮层：顶部有翻页与缩放控件，底部显示分辨率、体积、拍摄时间与设备。" loading="lazy">
           </figure>
           <figure class="shot">
             <img src="images/preview-video.png" width="1400" height="925" alt="同一个浮层打开视频时的样子：内嵌播放器与播放控件，底部显示分辨率、时长与容器时间。" loading="lazy">
@@ -182,7 +199,7 @@
           <figcaption>浅色</figcaption>
         </figure>
         <figure class="shot">
-          <img src="images/overview-dark.png" width="1400" height="925" alt="深色外观下的主界面。" loading="lazy">
+          <img src="images/overview-dark.png" width="1400" height="885" alt="深色外观下的主界面。" loading="lazy">
           <figcaption>深色</figcaption>
         </figure>
       </div>
@@ -199,7 +216,7 @@
       <div class="table-scroll">
         <table class="compare">
           <thead>
-            <tr><th>判定类型</th><th>怎么判</th><th>能抓到什么</th></tr>
+            <tr><th>类型</th><th>怎么判</th><th>能抓到什么</th></tr>
           </thead>
           <tbody>
             <tr>
@@ -218,9 +235,20 @@
               <td>转码过、加过片头片尾、重新剪辑过的同一段视频</td>
             </tr>
             <tr>
-              <td><strong>整组保留</strong></td>
-              <td>人工判断并入计划：该组不产生任何清理操作</td>
-              <td>「这几个确实都要留，只是长得像」的情况</td>
+              <td><strong>整组决定</strong></td>
+              <td>
+                卡片右上角是<strong>互斥的三态</strong>：
+                <strong class="text-pos">保留整组</strong>（绿色描边，组内不产生清理）、
+                <strong class="text-neg">都不保留</strong>（红色描边，整组全部成员移入回收站）、
+                默认的<strong>按选择</strong>（按每张卡片的勾选决定）
+              </td>
+              <td>连拍里几张都要留、相册里几张「只是凑数」、按普通规则挑一张</td>
+            </tr>
+            <tr>
+              <td><strong>跳过重复项</strong></td>
+              <td>重复项页的第二个动作 ——
+                完全不碰重复副本，只按「整理规则」页的模板把文件归档到目标目录</td>
+              <td>只想先整理目录结构、暂时不动重复副本的用法</td>
             </tr>
           </tbody>
         </table>
@@ -244,7 +272,7 @@
       <h2 class="section-title">照片不可再生，所以行为边界收得很窄</h2>
       <p class="section-lede">这一节是这个工具和多数「清理软件」最本质的区别。</p>
 
-      <div class="grid grid-2">
+      <div class="safety-grid">
         <div class="safety-item">
           <h3>扫描只读</h3>
           <p>读取元数据与内容指纹，不修改、不移动、不删除任何文件。</p>
@@ -262,6 +290,9 @@
           <h3>每一步都能撤销</h3>
           <p>执行过程写入 JSONL 日志。移动与重命名原路退回，回收站里的文件从回收站取回 ——
               包括被顶替的那份。</p>
+          <p><strong>「都不保留」也走同一条路</strong>：整组移入回收站的文件照样可以在操作日志里撤销找回。
+              而逐张勾选被清空属于误操作，程序会兜底保留一份 ——
+              只有显式选「都不保留」才放开这个护栏。</p>
         </div>
       </div>
 
@@ -313,19 +344,24 @@
             <h3>Apple Silicon 版 <span class="tag">推荐</span></h3>
             <p>适用于 M1 / M2 / M3 / M4 及更新芯片的 Mac</p>
           </div>
-          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.0/MediaCurator-v1.0.0-arm64.zip">MediaCurator-v1.0.0-arm64.zip<small>2.2 MB</small></a>
+          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-arm64.zip">MediaCurator-v1.0.1-arm64.zip<small>2.3 MB</small></a>
         </div>
         <div class="download-row">
           <div>
             <h3>通用版</h3>
             <p>Intel 芯片的 Mac，或不确定自己用哪种芯片时选这个</p>
           </div>
-          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.0/MediaCurator-v1.0.0-universal.zip">MediaCurator-v1.0.0-universal.zip<small>3.3 MB</small></a>
+          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-universal.zip">MediaCurator-v1.0.1-universal.zip<small>3.5 MB</small></a>
         </div>
       </div>
 
       <p class="req">
-        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.0-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.0-机型.zip</code>，内容完全一致。
+        <strong>v1.0.1 更新</strong>整组决定改为三态枚举（<code>按选择 / 保留整组 / 都不保留</code>），
+        修复了并查集之后顶部「整组保留 N 组」摘要的计数漂移；新增跳过重复项、直接进入按规则归档的用法。
+      </p>
+
+      <p class="req">
+        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.1-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.1-机型.zip</code>，内容完全一致。
       </p>
 
       <p class="req">

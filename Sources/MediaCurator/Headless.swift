@@ -72,6 +72,18 @@ enum HeadlessRunner {
             return await UIRenderCheck.runWidthSweep(fixtureRoot: root,
                                                      shotsDirectory: URL(fileURLWithPath: out),
                                                      widths: widths.map { CGFloat($0) })
+        case "demoshots":
+            let dir = value(of: "--dir", in: rest)
+                ?? NSTemporaryDirectory() + "mediacurator-demoshots"
+            let root = URL(fileURLWithPath: dir)
+            try? FileManager.default.removeItem(at: root)
+            guard DemoFixtureBuilder.build(at: root) else {
+                print("演示素材生成失败")
+                return 1
+            }
+            let shots = value(of: "--shots", in: rest) ?? dir + "/shots"
+            return await UIRenderCheck.renderDemoShots(fixtureRoot: root,
+                                                       shotsDirectory: URL(fileURLWithPath: shots))
         case "fixtures":
             let dir = value(of: "--dir", in: rest) ?? NSTemporaryDirectory() + "mediacurator-fixtures"
             return FixtureBuilder.build(at: URL(fileURLWithPath: dir)) ? 0 : 1
@@ -128,6 +140,9 @@ enum HeadlessRunner {
 
           MediaCurator --headless fixtures --dir <目录>
               只生成测试素材
+
+          MediaCurator --headless demoshots [--dir <素材目录>] [--shots <输出目录>]
+              用「演示素材」（像真实照片库）渲染官网截图，不做断言
 
           MediaCurator --headless scan <目录>... [--json]
               扫描并输出统计

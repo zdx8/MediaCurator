@@ -14,7 +14,7 @@ DISPLAY_NAME="影像管家"
 BUNDLE_ID="com.workbuddy.mediacurator"
 DIST="$ROOT/dist"
 APP_DIR="$DIST/$APP_NAME.app"
-VERSION="1.0.0"
+VERSION="1.0.1"
 # 图标缓存以「bundle 标识 + CFBundleVersion + 路径」为键，
 # 版本号写死会导致换了图标系统仍显示旧的，所以每次打包都让它变。
 BUILD_NUMBER="$(date +%y%m%d.%H%M)"

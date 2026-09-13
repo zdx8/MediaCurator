@@ -79,7 +79,9 @@ struct MediaPreviewOverlay: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 18)
         }
-        .task(id: item?.id) { await load() }
+        // `load()` 本身是同步的：解码交给它内部的 `Task.detached`，
+        // 所以这里不该出现 `await`（编译器会为此报警告）。
+        .task(id: item?.id) { load() }
     }
 
     // MARK: - 顶部工具条

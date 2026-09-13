@@ -224,6 +224,27 @@ struct ThumbnailView: View {
 
     @State private var image: NSImage?
     @State private var failed = false
+    /// 已经载入（或确认无需再载入）的是哪个 URL。
+    ///
+    /// 它解决的问题是「先清空、再异步填回」这一对操作：缓存命中时初始值已经是最终画面，
+    /// 但 `.task` 一进来就把 `image` 置空，随后的 `await` 又要等下一帧才回填 ——
+    /// 真实界面里表现为闪一下，离屏渲染里根本没有下一帧，导出的截图就永远停在空占位符上。
+    @State private var loadedURL: URL?
+
+    init(url: URL, kind: MediaKind, size: CGFloat = 96,
+         highlighted: Bool = false, dimmed: Bool = false) {
+        self.url = url
+        self.kind = kind
+        self.size = size
+        self.highlighted = highlighted
+        self.dimmed = dimmed
+        // 缓存命中就直接作为初始值，并且标记为「已载入」，让 `.task` 直接跳过。
+        let cached = ThumbnailProvider.shared.cachedImage(for: url, maxPixel: max(64, size * 2))
+        if let cached {
+            _image = State(initialValue: ThumbnailProvider.nsImage(from: cached))
+            _loadedURL = State(initialValue: url)
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -263,6 +284,7 @@ struct ThumbnailView: View {
             .strokeBorder(highlighted ? Palette.positive : Color(nsColor: .separatorColor),
                           lineWidth: highlighted ? 2.5 : 1))
         .task(id: url) {
+            guard loadedURL != url else { return }
             image = nil
             failed = false
             let target = max(64, size * 2)
@@ -271,6 +293,7 @@ struct ThumbnailView: View {
             } else {
                 failed = true
             }
+            loadedURL = url
         }
     }
 }

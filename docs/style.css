@@ -27,6 +27,9 @@
   --danger: #b23c39;
   --danger-soft: #fdf3f2;
 
+  /* 「保留 / 安全」的意思色。应用内保留整组用的是绿色描边，官网跟同一套语义。 */
+  --positive: #2c7a52;
+
   --radius: 14px;
   --radius-sm: 9px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px rgba(16, 24, 40, 0.07);
@@ -58,6 +61,8 @@
 
     --danger: #e8837f;
     --danger-soft: #2a1e1e;
+
+    --positive: #6ec48d;
 
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
     --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
@@ -216,6 +221,25 @@ code {
 .btn-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .btn-primary small, .btn-primary .btn-sub { color: rgba(255, 255, 255, 0.82); }
 
+/* 版本说明：只用于 hero 下方一行，告诉访客这一版改了什么 */
+.version-pill {
+  display: inline-block;
+  margin: 0 0 34px;
+  padding: 7px 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 13.5px;
+  color: var(--text-soft);
+}
+.version-pill strong { color: var(--accent); font-weight: 650; }
+
+/* 语义色。前景强调光靠加粗不够，这里给「保留整组 / 都不保留」各一个颜色，
+   与应用内绿色=保留、红色=清理的约定一致。 */
+.text-pos { color: var(--positive); }
+.text-neg { color: var(--danger); }
+.text-mute { color: var(--text-mute); }
+
 /* ---------- Hero 事实条 ---------- */
 .hero-facts {
   display: flex;
@@ -256,6 +280,15 @@ code {
   margin-top: 56px;
 }
 .shot-pair .shot figcaption { margin-top: 9px; }
+
+/* 同一节里两张并列的对照图（保留整组 / 都不保留）。
+   和图注一样是「二选一」的关系，靠紧一点，读者才会拿它们互相对照。 */
+.shot-pair-tight {
+  margin-top: 20px;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
 .pair-note {
   margin: 18px 0 0;
   text-align: center;
@@ -308,7 +341,8 @@ code {
 
 .step-text { max-width: 640px; margin-bottom: 22px; }
 .step-text h3 { margin: 0 0 8px; font-size: 21px; font-weight: 640; }
-.step-text p { margin: 0; color: var(--text-soft); }
+.step-text p { margin: 0 0 10px; color: var(--text-soft); }
+.step-text p:last-child { margin-bottom: 0; }
 
 .step-no {
   display: inline-grid;
@@ -366,6 +400,17 @@ code {
 .note p { margin: 0; color: var(--text-soft); font-size: 15.5px; }
 
 /* ---------- 安全模型 ---------- */
+/* 固定两列而不是 auto-fit：四条的高度差得远（「每一步都能撤销」那段最长），
+   auto-fit 在宽屏上会排成 3+1，最后一条孤零零地占一大格。 */
+.safety-grid {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 760px) {
+  .safety-grid { grid-template-columns: 1fr; }
+}
+
 .safety-item {
   padding: 24px 26px;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
@@ -378,7 +423,8 @@ code {
   font-weight: 620;
   color: var(--accent);
 }
-.safety-item p { margin: 0; color: var(--text-soft); font-size: 15.5px; }
+.safety-item p { margin: 0 0 10px; color: var(--text-soft); font-size: 15.5px; }
+.safety-item p:last-child { margin-bottom: 0; }
 
 .safety-foot {
   margin: 36px 0 0;

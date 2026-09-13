@@ -137,7 +137,7 @@ enum UIRenderCheck {
 
         for page in AppPage.allCases {
             state.page = page
-            guard let result = render(name: page.title, size: canvas,
+            guard let result = await render(name: page.title, size: canvas,
                                       saveTo: shotsDirectory?.appendingPathComponent("\(page.step)-\(page.title).png"),
                                       content: {
                 AnyView(pageView(for: page, state: state))
@@ -162,7 +162,7 @@ enum UIRenderCheck {
         // ---------- 数据变化必须反映到画面上 ----------
         print("\n▸ 数据驱动的渲染差异")
         state.page = .duplicates
-        guard let before = render(name: "重复项-原始", size: canvas, content: {
+        guard let before = await render(name: "重复项-原始", size: canvas, content: {
             AnyView(DuplicatesView(state: state))
         }) else {
             checker.check(false, "重复项页首次渲染")
@@ -172,7 +172,7 @@ enum UIRenderCheck {
         // 造一个差异：把重复组全部隐藏（模拟没有重复项）
         let savedGroups = state.groups
         state.groups = []
-        guard let after = render(name: "重复项-空", size: canvas, content: {
+        guard let after = await render(name: "重复项-空", size: canvas, content: {
             AnyView(DuplicatesView(state: state))
         }) else {
             checker.check(false, "重复项页空态渲染")
@@ -203,7 +203,7 @@ enum UIRenderCheck {
                 chipCounts.append(variant.disposition == .discardAll
                                   ? state.dedupSummary.discardedWholeGroupCount
                                   : state.dedupSummary.keptWholeGroupCount)
-                if let result = render(name: "整组决定-\(variant.label)", size: canvas,
+                if let result = await render(name: "整组决定-\(variant.label)", size: canvas,
                                        saveTo: variant.shot.map {
                                            shotsDirectory?.appendingPathComponent($0)
                                        } ?? nil,
@@ -285,7 +285,7 @@ enum UIRenderCheck {
                     }
                     return ThumbnailProvider.nsImage(from: cg)
                 }
-                let overlay = render(name: "放大预览", size: canvas,
+                let overlay = await render(name: "放大预览", size: canvas,
                                      saveTo: shotsDirectory?.appendingPathComponent("6-放大预览.png"),
                                      content: {
                     AnyView(MediaPreviewOverlay(items: members,
@@ -322,7 +322,7 @@ enum UIRenderCheck {
         if let videoGroup = state.groups.first(where: { $0.kind == .similarVideo }),
            let video = videoGroup.memberIDs.compactMap({ state.itemsByID[$0] }).first {
             let videoMembers = videoGroup.memberIDs.compactMap { state.itemsByID[$0] }
-            let videoOverlay = render(name: "视频预览", size: canvas,
+            let videoOverlay = await render(name: "视频预览", size: canvas,
                                       saveTo: shotsDirectory?.appendingPathComponent("7-视频预览.png"),
                                       content: {
                 AnyView(MediaPreviewOverlay(items: videoMembers,
@@ -355,7 +355,7 @@ enum UIRenderCheck {
             (.dark, "深色", "0-总览-深色.png")
         ]
         for item in schemes {
-            guard let result = render(name: item.label,
+            guard let result = await render(name: item.label,
                                       size: CGSize(width: 1360, height: 860),
                                       colorScheme: item.scheme,
                                       saveTo: shotsDirectory?.appendingPathComponent(item.file),
@@ -473,6 +473,172 @@ enum UIRenderCheck {
                               filePath: "/tmp/影像管家界面自检.jsonl")
     }
 
+    // MARK: - 官网截图
+
+    /// 渲染官网要用的成品截图。
+    ///
+    /// 与 `run` 的区别是**不做断言**：它只负责把画面导出来，素材也换成
+    /// `DemoFixtureBuilder` 那一套。自检素材是多频正弦图案 —— 平滑、可缩放、
+    /// 便于判定，但画面上就是抽象色块，摆进官网首屏等于告诉访客这是个测试程序。
+    ///
+    /// 输出是屏幕缩放比下的原始像素（本机 2x，即点数 × 2），
+    /// 缩到网页尺寸由 `Scripts/make_site_shots.sh` 负责。
+    static func renderDemoShots(fixtureRoot: URL, shotsDirectory: URL) async -> Int32 {
+        print("影像管家 · 官网截图")
+        print(String(repeating: "─", count: 64))
+
+        JournalStore.overrideDirectory = fixtureRoot.appendingPathComponent("journals",
+                                                                           isDirectory: true)
+
+        let state = AppState()
+        state.settings.sourceFolders = [fixtureRoot.path]
+        state.settings.useHashCache = false
+        state.settings.minimumFileSize = 0
+        await state.performScan()
+
+        guard !state.groups.isEmpty else {
+            print("演示素材没有产生重复组，无法出图")
+            return 1
+        }
+        print("素材：\(state.items.count) 个文件，\(state.groups.count) 组重复")
+        for group in state.groups {
+            let names = group.memberIDs.compactMap { state.itemsByID[$0]?.fileName }
+            print("  · \(group.kind.displayName)（\(group.memberCount) 个）：\(names.joined(separator: " / "))")
+        }
+
+        try? FileManager.default.createDirectory(at: shotsDirectory, withIntermediateDirectories: true)
+
+        // 先把缩略图挨个解一遍。
+        //
+        // 解码跑在 `ThumbnailProvider` 这个 actor 上，是**串行**的；视图里的 `.task`
+        // 只能一张张排队。渲染的等待窗口内排不完，于是先画出来的页面里靠后的缩略图
+        // 还是空的（视频那两张反而先出来）。先解一遍，渲染时就全是缓存命中。
+        // 224 = `DuplicateGroupCard` 里 size 112 的缩略图实际请求的像素数。
+        var warmed = 0
+        for item in state.items {
+            if await ThumbnailProvider.shared.thumbnail(for: item.url, maxPixel: 224) != nil { warmed += 1 }
+        }
+        print("缩略图预热：\(warmed)/\(state.items.count) 张")
+
+        // 「整理规则」与「执行计划」两页要有内容可画
+        state.rule.destinationRoot = fixtureRoot.deletingLastPathComponent()
+            .appendingPathComponent("已整理").path
+        state.rule.folderTemplate = "{yyyy}/{MM}/{yyyy-MM-dd}"
+        state.rule.renameTemplate = "{datetime}_{orig}"
+        state.filter.cleanRedundantDuplicates = false
+        let built = PlanBuilder.build(items: state.items,
+                                      groups: state.groups,
+                                      rule: state.rule,
+                                      filter: state.filter)
+        state.operations = built.operations
+        state.planSummary = built.summary
+        state.planWarnings = built.warnings
+        state.folderCounts = built.folderCounts
+        state.sessions = [makeSyntheticSession(from: state)]
+
+        var failures: [String] = []
+
+        func save(_ file: String,
+                  size: CGSize,
+                  scheme: ColorScheme? = .light,
+                  content: () -> AnyView) async {
+            let result = await render(name: file,
+                                      size: size,
+                                      colorScheme: scheme,
+                                      saveTo: shotsDirectory.appendingPathComponent("\(file).png"),
+                                      settle: 0.6,
+                                      content: content)
+            if let result {
+                print(String(format: "  ✓ %@：%d×%d", file, result.width, result.height))
+            } else {
+                failures.append(file)
+                print("  ✗ \(file)")
+            }
+        }
+
+        // 整机总览：侧栏 + 重复项页，官网首屏用
+        let overview = CGSize(width: 1360, height: 860)
+        await save("0-总览-浅色", size: overview, scheme: .light) {
+            AnyView(HStack(spacing: 0) {
+                SidebarView(state: state)
+                DuplicatesView(state: state)
+            })
+        }
+        await save("0-总览-深色", size: overview, scheme: .dark) {
+            AnyView(HStack(spacing: 0) {
+                SidebarView(state: state)
+                DuplicatesView(state: state)
+            })
+        }
+
+        // 各功能页
+        let canvas = CGSize(width: 1400, height: 925)
+        for page in AppPage.allCases {
+            state.page = page
+            await save("\(page.step)-\(page.title)", size: canvas) {
+                AnyView(pageView(for: page, state: state))
+            }
+        }
+
+        // 重复项的两种整组决定：各出一张，官网要能看出区别
+        state.page = .duplicates
+        let dispositions: [(String, GroupDisposition)] = [
+            ("2-重复项-保留整组", .keepAll),
+            ("2-重复项-都不保留", .discardAll)
+        ]
+        for (file, disposition) in dispositions {
+            state.groups[0].disposition = disposition
+            await save(file, size: canvas) {
+                AnyView(DuplicatesView(state: state))
+            }
+        }
+        state.groups[0].disposition = .bySelection
+
+        // 放大预览（图片）
+        if let group = state.groups.first(where: { $0.kind != .similarVideo }),
+           let first = group.memberIDs.compactMap({ state.itemsByID[$0] }).first {
+            let members = group.memberIDs.compactMap { state.itemsByID[$0] }
+            let injected = MainThread.run { () -> NSImage? in
+                guard let cg = PerceptualHash.downsampledImage(url: first.url, maxPixel: 1400) else {
+                    return nil
+                }
+                return ThumbnailProvider.nsImage(from: cg)
+            }
+            await save("6-放大预览", size: canvas) {
+                AnyView(MediaPreviewOverlay(items: members,
+                                            index: .constant(0),
+                                            keepIDs: group.keepIDs,
+                                            disposition: group.disposition,
+                                            onToggleKeep: { _ in },
+                                            onReveal: { _ in },
+                                            onOpen: { _ in },
+                                            onClose: {},
+                                            injectedImage: injected))
+            }
+        }
+
+        // 放大预览（视频）
+        if let videoGroup = state.groups.first(where: { $0.kind == .similarVideo }) {
+            let members = videoGroup.memberIDs.compactMap { state.itemsByID[$0] }
+            await save("7-视频预览", size: canvas) {
+                AnyView(MediaPreviewOverlay(items: members,
+                                            index: .constant(0),
+                                            keepIDs: videoGroup.keepIDs,
+                                            disposition: videoGroup.disposition,
+                                            onToggleKeep: { _ in },
+                                            onReveal: { _ in },
+                                            onOpen: { _ in },
+                                            onClose: {}))
+            }
+        }
+
+        print(String(repeating: "─", count: 64))
+        print(failures.isEmpty
+              ? "截图导出完成：\(shotsDirectory.path)"
+              : "有 \(failures.count) 张渲染失败：\(failures.joined(separator: "、"))")
+        return failures.isEmpty ? 0 : 1
+    }
+
     @ViewBuilder
     private static func pageView(for page: AppPage, state: AppState) -> some View {
         switch page {
@@ -521,7 +687,7 @@ enum UIRenderCheck {
         // 判据自证：先故意渲染一个宽度远超画布的画面，边缘检测**必须**报警。
         // 否则「没有越界」可能只是因为检测函数永远返回 0 —— 本项目已经吃过一次
         // 「防线完全失效却全绿」的亏（见离屏渲染的字节行宽问题）。
-        if let overflow = render(name: "越界对照",
+        if let overflow = await render(name: "越界对照",
                                  size: CGSize(width: 300, height: 200),
                                  content: {
             AnyView(Color.red.frame(width: 900, height: 120))
@@ -543,7 +709,7 @@ enum UIRenderCheck {
             for variant in variants {
                 state.groups[0].disposition = variant.disposition
                 let name = "w\(Int(width))-\(variant.label)"
-                let result = render(name: name,
+                let result = await render(name: name,
                                     size: CGSize(width: width, height: 740),
                                     saveTo: shotsDirectory.appendingPathComponent("\(name).png"),
                                     content: {
@@ -576,22 +742,28 @@ enum UIRenderCheck {
 
     /// 把视图挂进一个**永不显示**的无边框窗口再截图 —— 只建 NSHostingView 不给窗口，
     /// 像 NavigationSplitView / ScrollView 这类容器量不到尺寸，布局不会完整解析。
+    ///
+    /// `async` 不是为了并发，而是为了**给异步加载留出落地时间**：缩略图走 `.task` 异步解码，
+    /// 而本函数原本是纯同步的连续调用 —— 中途不让出主 actor，那些任务就一直排在队里不推进。
+    /// 结果是导出的截图里每张缩略图都停在 `ProgressView` 占位符上，看起来像张坏图。
+    /// `settle` 就是「装好视图之后、真正截图之前」那段让出主 actor 的等待。
     static func render(name: String,
                        size: CGSize,
                        colorScheme: ColorScheme? = .light,
                        saveTo: URL? = nil,
-                       @ViewBuilder content: () -> AnyView) -> RenderResult? {
-        MainThread.run {
-            renderOnMainThread(name: name, size: size,
-                               colorScheme: colorScheme, saveTo: saveTo, content: content)
-        }
+                       settle: TimeInterval = 0.45,
+                       @ViewBuilder content: () -> AnyView) async -> RenderResult? {
+        await renderOnMainThread(name: name, size: size,
+                                 colorScheme: colorScheme, saveTo: saveTo,
+                                 settle: settle, content: content)
     }
 
     private static func renderOnMainThread(name: String,
                                            size: CGSize,
                                            colorScheme: ColorScheme?,
                                            saveTo: URL?,
-                                           content: () -> AnyView) -> RenderResult? {
+                                           settle: TimeInterval,
+                                           content: () -> AnyView) async -> RenderResult? {
         // 首次调用时把 AppKit 初始化出来，避免后续窗口创建依赖未初始化的运行时
         _ = NSApplication.shared
 
@@ -611,6 +783,26 @@ enum UIRenderCheck {
         window.contentView = hosting
         window.layoutIfNeeded()
         hosting.layoutSubtreeIfNeeded()
+
+        // 让异步加载赶在截图之前完成。
+        //
+        // 两个坑叠在一起：
+        // 1. SwiftUI 的 `.task` 只在视图进入窗口、且窗口可见之后才启动，所以要
+        //    把窗口挪到屏幕外再 `orderBack` —— 既不显示，又算「已进入窗口层级」。
+        // 2. 它的续体排在主 actor 的队列里，纯同步的连续调用推不动它。
+        //    **不能用 `RunLoop.run` 硬泵** —— 实测那样排不动 Swift 并发的队列，
+        //    必须靠 `await` 真的把主 actor 让出去，队列才会被消费。
+        // 合起来的效果：不这么做，导出的截图里所有缩略图都是转圈的空框。
+        if settle > 0 {
+            window.setFrameOrigin(NSPoint(x: -32000, y: -32000))
+            window.orderBack(nil)
+            let deadline = Date().addingTimeInterval(settle)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 12_000_000)
+                window.layoutIfNeeded()
+                hosting.layoutSubtreeIfNeeded()
+            }
+        }
 
         guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return nil }
         hosting.cacheDisplay(in: hosting.bounds, to: rep)

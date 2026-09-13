@@ -19,7 +19,9 @@ actor ThumbnailProvider {
         init(_ image: CGImage) { self.image = image }
     }
 
-    private let cache = NSCache<NSString, Entry>()
+    /// `nonisolated` 是为了让 `cachedImage` 同步访问它（见那里的说明）。
+    /// `NSCache` 自带线程安全，所以这里不加 actor 隔离是安全的。
+    nonisolated(unsafe) private let cache = NSCache<NSString, Entry>()
     private var inFlight: [String: Task<CGImage?, Never>] = [:]
 
     private init() {
@@ -31,6 +33,17 @@ actor ThumbnailProvider {
     func clear() {
         cache.removeAllObjects()
         inFlight.removeAll()
+    }
+
+    /// 缓存命中时**同步**取出缩略图，未命中返回 nil（不会触发解码）。
+    ///
+    /// 给视图当初始值用。视图原本只能靠 `.task` 异步取图，那是「先画占位符、
+    /// 下一帧再换成图」—— 滚动时表现为闪一下，离屏渲染里则根本没有下一帧，
+    /// 导出的截图会永远停在空占位符上。
+    /// `NSCache` 自身线程安全，所以这里可以安全地绕过 actor 隔离。
+    nonisolated func cachedImage(for url: URL, maxPixel: CGFloat) -> CGImage? {
+        let pixel = Int(max(64, min(2048, maxPixel)))
+        return cache.object(forKey: "\(url.path)|\(pixel)" as NSString)?.image
     }
 
     func thumbnail(for url: URL, maxPixel: CGFloat) async -> CGImage? {
