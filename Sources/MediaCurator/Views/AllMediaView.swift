@@ -10,6 +10,13 @@ import AppKit
 /// 「这个勾是程序推荐要清的」还是「我自己挑的」。
 struct AllMediaView: View {
     @ObservedObject var state: AppState
+    /// 仅供离屏渲染注入：指定初始的折叠集合，跳过「默认收起第一层以下」那一步。
+    ///
+    /// 传 nil（正常运行）走默认逻辑。存在的意义是让「默认折叠到底有没有生效」
+    /// 能在离屏渲染里被验证 —— 目录树少几行、多几行，看截图根本分辨不出来，
+    /// 而它恰恰是个很容易「代码写了但没接上」的地方。
+    var injectedCollapsed: Set<String>? = nil
+
     @State private var visibleCount = 120
     @State private var previewIndex: Int?
     /// 来源目录树默认展开：这是「这一页能看到哪些目录、哪些目录不参与整理」的唯一入口，
@@ -18,8 +25,11 @@ struct AllMediaView: View {
     /// 被收起子目录的路径。
     ///
     /// 存路径而不是下标或 id：重新扫描后目录树会重建，只有路径在两次之间是稳定的。
-    /// 这也是临时浏览状态，不持久化 —— 下次打开全部展开，比记住一堆收起状态更符合预期。
+    /// 这也是临时浏览状态，不持久化 —— 下次打开重新按默认收起，比记住一堆状态更符合预期。
     @State private var collapsedFolders: Set<String> = []
+    /// 「首次进入默认收起第一层以下」是否已经应用过。
+    /// 只应用一次：之后再怎么刷新数据，都不能覆盖用户自己折叠／展开的结果。
+    @State private var didApplyDefaultCollapse = false
 
     var body: some View {
         // 筛选结果、重复角色、目录树各算一次就够。它们都是 O(文件数) 甚至 O(n log n)
@@ -61,6 +71,28 @@ struct AllMediaView: View {
         .overlay { previewOverlay(visible: visible) }
         .animation(.easeInOut(duration: 0.16), value: previewIndex)
         .onChange(of: state.mediaFilter) { _, _ in visibleCount = 120 }
+        // 目录树就绪时应用一次「默认收起第一层以下」。
+        //
+        // 用 `task(id:)` 而不是 `onAppear`：用户很可能是**先扫描、再切到这一页**，
+        // 而这一页在侧栏里是随时可点的 —— 挂 onAppear 会漏掉「进来时还没有数据」这种顺序。
+        // `didApplyDefaultCollapse` 保证只生效一次，之后不再干扰用户自己的折叠状态。
+        .task(id: state.items.count) {
+            if let injected = injectedCollapsed {
+                collapsedFolders = injected
+                didApplyDefaultCollapse = true
+                return
+            }
+            applyDefaultCollapseIfNeeded(sourceGroups)
+        }
+    }
+
+    private func applyDefaultCollapseIfNeeded(_ groups: [SourceFolderGroup]) {
+        guard !didApplyDefaultCollapse, !groups.isEmpty else { return }
+        didApplyDefaultCollapse = true
+        // 不加动画：首次进入时整块目录树收一下，看起来更像卡顿而不是过渡。
+        collapsedFolders = groups.reduce(into: Set<String>()) {
+            $0.formUnion($1.defaultCollapsed)
+        }
     }
 
     // MARK: - 页头主动作

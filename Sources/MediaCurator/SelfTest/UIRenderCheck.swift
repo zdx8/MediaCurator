@@ -349,6 +349,22 @@ enum UIRenderCheck {
             checker.equal(node.directChildCounts[probeRoot], 2, "来源根的直接下级是 2 个")
             checker.equal(node.directChildCounts[midPath], 1, "2023 的直接下级是 1 个")
             checker.equal(node.directChildCounts[sibling], nil, "叶子目录没有下级计数")
+
+            // 首次进入的默认折叠：只露到第一层。
+            // 层级深 / 子目录多的时候，默认全展开会把目录树铺满整屏、把网格挤下去 ——
+            // 但全收起又只剩一行，用户不知道里面有什么。所以只收「第一层及以下有下级」的。
+            let defaults = node.defaultCollapsed
+            checker.equal(defaults, [midPath], "默认收起第一层以下有下级的目录（这里只有 2023）")
+            checker.check(!defaults.contains(probeRoot),
+                          "来源根不在默认收起之列（否则进来只看得见一行）")
+            checker.check(!defaults.contains(sibling), "叶子目录不会被列为收起")
+
+            let defaultRows = node.visibleFolders(collapsed: defaults)
+            checker.equal(defaultRows.count, 3, "默认状态下显示根 / 2023 / 备份 三行")
+            checker.check(defaultRows.contains { $0.path == probeRoot }, "默认显示来源根")
+            checker.check(defaultRows.contains { $0.path == sibling }, "默认显示第一层的子目录")
+            checker.check(!defaultRows.contains { $0.path == probeRoot + "/2023/2023-05" },
+                          "默认不显示第二层（随 2023 收起）")
         }
         state.excludedFromOrganizing = []
         state.items = savedItemsForTree
@@ -828,6 +844,18 @@ enum UIRenderCheck {
         let allMediaShot = await save("all-media-selected", size: canvas) {
             AnyView(AllMediaView(state: state))
         }
+
+        // 目录树的「默认折叠」必须真的画出来。这里并排渲染默认态与全展开态，
+        // 两者指纹相同就说明默认折叠没接上 —— 而目录树少几行、多几行，
+        // 人看截图分辨不出来，这正是最容易「代码写了但没生效」的地方。
+        // 这两张只用于比对，不进官网（`make_site_shots.sh` 只 emit 指定的那几张）。
+        let expandedShot = await save("all-media-expanded", size: canvas) {
+            AnyView(AllMediaView(state: state, injectedCollapsed: []))
+        }
+        if let a = allMediaShot, let b = expandedShot, a.digest == b.digest {
+            failures.append("「所有媒体」页的默认折叠没有生效（收起与展开渲染结果完全相同）")
+        }
+
         // 官网截图的验收标准只有一条：**画面里得真有照片**。
         // 缩略图没解码出来时截图照样导出成功、文件大小也正常，但整片网格是灰色占位符 ——
         // 这是后果最直接、又最难自己发现的一种失败（人得逐张点开看才会注意到）。

@@ -166,6 +166,16 @@ struct SourceFolderGroup: Identifiable {
         return counts
     }
 
+    /// 首次进入时默认收起哪些目录：**第一层及以下**有下级的那些。
+    ///
+    /// 来源根保持展开 —— 全收起的话一进来只看得见一行，用户根本不知道里面有东西；
+    /// 第一层子目录显示出来（能看清有哪些目录），但它们各自的下级收起。
+    /// 否则层级深、子目录多的时候目录树会铺满整屏，把下面的网格挤到很远。
+    var defaultCollapsed: Set<String> {
+        let parents = foldersWithChildren
+        return Set(folders.filter { $0.depth > 0 && parents.contains($0.path) }.map { $0.path })
+    }
+
     /// 按折叠状态算出实际要显示的行。
     ///
     /// 抽成数据层的纯函数而不是写在视图里，是为了**能被自检直接断言** ——
