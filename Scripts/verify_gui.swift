@@ -6,7 +6,9 @@
 //   /tmp/verify-gui find  <pid> <子串>      # 查找包含该子串的控件
 //   /tmp/verify-gui pressat <pid> <x> <y>   # 按下包含该坐标的最内层按钮
 //   /tmp/verify-gui clickat <pid> <x> <y>   # 在坐标处发真实鼠标按下/抬起事件
+//   /tmp/verify-gui hover   <pid> <x> <y>   # 把鼠标移过去（唤起仅悬停可见的控件）
 //   /tmp/verify-gui scroll  <pid> <x> <y> <行数|负数为向上>  # 在坐标处滚轮
+//   /tmp/verify-gui bounds  <pid>           # 检查有没有控件超出窗口边界（窄窗口布局回归）
 import ApplicationServices
 import AppKit
 import Foundation
@@ -221,6 +223,53 @@ case "scroll":
     }
     print("已在 (\(Int(px)), \(Int(py))) 滚动 \(lines) 行")
     exit(0)
+
+case "bounds":
+    // 窄窗口布局回归检查。
+    //
+    // 界面上「按钮显示不完全」这类问题的根因都是内容超出了窗口边界，
+    // 而 SwiftUI 只会默默压缩或裁掉它们、不会报任何错。这条命令把
+    // 「窗口有多大」与「每个控件落在哪」摆在一起比，越界就是失败。
+    // 纵向不检查：滚动区域里的内容本来就在可视范围之外。
+    guard let window = all.first(where: { describe($0.0).role == "AXWindow" })?.0,
+          let windowRect = describe(window).rect else {
+        print("找不到窗口")
+        exit(3)
+    }
+    let right = windowRect.maxX
+    print("窗口：@\(Int(windowRect.minX)),\(Int(windowRect.minY)) "
+          + "\(Int(windowRect.width))x\(Int(windowRect.height))")
+    print("右边界：\(Int(right))")
+
+    var offenders: [(String, Int)] = []
+    // 菜单栏、下拉菜单这类元素挂在应用的 AX 树上，但不属于窗口内容，
+    // 不排掉会把系统菜单栏误报成「越界」。
+    let ignoredRoles: Set<String> = ["AXMenuBar", "AXMenuBarItem", "AXMenu", "AXMenuItem",
+                                     "AXMenuExtra", "AXScrollBar", "AXPopover", "AXSheet"]
+    for (element, _) in all {
+        let info = describe(element)
+        guard let rect = info.rect, !ignoredRoles.contains(info.role) else { continue }
+        // 只检查真正落在窗口内的控件（滚动到可视区外的内容纵向超出属正常）
+        guard rect.midY >= windowRect.minY, rect.midY <= windowRect.maxY else { continue }
+        guard rect.midX <= right else { continue }
+        if rect.maxX > right {
+            let label = !info.value.isEmpty ? info.value : info.title
+            offenders.append(("\(info.role) \(label.prefix(40)) "
+                              + "@\(Int(rect.minX)),\(Int(rect.minY)) "
+                              + "\(Int(rect.width))x\(Int(rect.height))",
+                              Int(rect.maxX - right)))
+        }
+    }
+
+    if offenders.isEmpty {
+        print("✓ 没有控件超出窗口右边界")
+        exit(0)
+    }
+    print("✗ 有 \(offenders.count) 个控件超出右边界（会被裁掉或压扁）：")
+    for (text, over) in offenders.sorted(by: { $0.1 > $1.1 }).prefix(12) {
+        print("   越界 \(over)px：\(text)")
+    }
+    exit(1)
 
 default:
     print("未知命令 \(command)")

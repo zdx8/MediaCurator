@@ -52,8 +52,8 @@ enum DuplicateDetector {
             // 必须有一个稳定的最终裁决：分组来自 `clusters()` 的字典遍历，顺序本身不确定，
             // 而 Swift 的 sort 并不保证稳定 —— 少了这一条，同一批素材在不同次扫描里
             // 会给出不同的分组顺序，界面列表忽上忽下，测试也会时好时坏。
-            let lp = lhs.keepID.flatMap { pathByID[$0] } ?? ""
-            let rp = rhs.keepID.flatMap { pathByID[$0] } ?? ""
+            let lp = lhs.memberIDs.first.flatMap { pathByID[$0] } ?? ""
+            let rp = rhs.memberIDs.first.flatMap { pathByID[$0] } ?? ""
             return lp < rp
         }
 
@@ -234,7 +234,7 @@ enum DuplicateDetector {
             groups.append(DuplicateGroup(
                 kind: kind,
                 memberIDs: orderMembers(bucket: globalIndices, keep: decision.index, items: items),
-                keepID: items[decision.index].id,
+                keepIDs: [items[decision.index].id],
                 keepReason: decision.reason,
                 maxDistance: kind == .exact ? 0 : maxDistance))
         }

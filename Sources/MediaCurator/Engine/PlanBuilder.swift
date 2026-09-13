@@ -42,10 +42,15 @@ enum PlanBuilder {
         var keepNameByGroup: [UUID: String] = [:]
         let nameByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.fileName) })
         for group in groups where !group.keepWholeGroup {
-            if let keep = group.keepID, let name = nameByID[keep] {
-                keepNameByGroup[group.id] = name
+            // 保留项可以多选，理由文案里只列第一个并标出总数，避免把一长串文件名塞进一行
+            let keep = group.effectiveKeepIDs
+            let keptNames = group.memberIDs.filter { keep.contains($0) }.compactMap { nameByID[$0] }
+            if let first = keptNames.first {
+                keepNameByGroup[group.id] = keptNames.count > 1
+                    ? "\(first) 等 \(keptNames.count) 份"
+                    : first
             }
-            for member in group.memberIDs where member != group.keepID {
+            for member in group.memberIDs where !keep.contains(member) {
                 redundant[member] = group
             }
         }

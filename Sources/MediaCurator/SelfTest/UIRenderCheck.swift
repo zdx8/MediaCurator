@@ -210,9 +210,9 @@ enum UIRenderCheck {
                                      content: {
                     AnyView(MediaPreviewOverlay(items: members,
                                                 index: .constant(0),
-                                                keepID: group.keepID,
+                                                keepIDs: group.keepIDs,
                                                 keepWhole: group.keepWholeGroup,
-                                                onSetKeep: { _ in },
+                                                onToggleKeep: { _ in },
                                                 onReveal: { _ in },
                                                 onOpen: { _ in },
                                                 onClose: {},
@@ -247,9 +247,9 @@ enum UIRenderCheck {
                                       content: {
                 AnyView(MediaPreviewOverlay(items: videoMembers,
                                             index: .constant(0),
-                                            keepID: videoGroup.keepID,
+                                            keepIDs: videoGroup.keepIDs,
                                             keepWhole: videoGroup.keepWholeGroup,
-                                            onSetKeep: { _ in },
+                                            onToggleKeep: { _ in },
                                             onReveal: { _ in },
                                             onOpen: { _ in },
                                             onClose: {}))

@@ -145,7 +145,7 @@ enum SelfTest {
             checker.equal(groupNames(group), ["B_original.jpg", "B_exact_copy.jpg"],
                           "精确重复组成员正确")
             checker.equal(group.maxDistance, 0, "精确重复的最大距离为 0")
-            checker.check(group.keepID != nil, "精确重复组给出了保留建议")
+            checker.equal(group.keepIDs.count, 1, "精确重复组默认只推荐保留一份")
         } else {
             checker.check(false, "图片 B 未形成精确重复组")
         }
@@ -398,6 +398,67 @@ enum SelfTest {
                           "整组保留不改变分组总数")
         } else {
             checker.check(false, "没有可用于整组保留断言的分组")
+        }
+
+        // ---------- 保留多选 ----------
+        checker.section("保留多选")
+
+        // 取一个 3 成员的组，把保留项从一个改成两个，验证「少清理一份」
+        if let base = dedup.groups.first(where: { $0.memberCount >= 3 }) {
+            let sizes = Dictionary(dedup.items.map { ($0.id, $0.fileSize) },
+                                   uniquingKeysWith: { first, _ in first })
+
+            var multi = dedup.groups
+            let index = multi.firstIndex { $0.id == base.id }!
+            let firstTwo = Array(base.memberIDs.prefix(2))
+            multi[index].keepIDs = Set(firstTwo)
+
+            checker.equal(multi[index].keepCount, 2, "同组可以勾选两个保留项")
+            checker.equal(multi[index].removableCount, base.memberCount - 2,
+                          "多选后待清理数量相应减少")
+            checker.equal(multi[index].reclaimableBytes(sizes: sizes),
+                          base.reclaimableBytes(sizes: sizes) - (sizes[firstTwo[1]] ?? 0),
+                          "多选后可释放空间相应减少")
+            checker.check(!multi[index].allMembersKept, "仍有一部分成员待清理时不算全部保留")
+
+            // 计划里只应剩下未勾选的那些
+            var multiFilter = PlanFilter()
+            multiFilter.cleanRedundantDuplicates = true
+            multiFilter.onlyRedundantDuplicates = true
+            let multiPlan = PlanBuilder.build(items: dedup.items, groups: multi,
+                                              rule: rule, filter: multiFilter)
+            let trashed = multiPlan.operations.filter {
+                $0.kind == .trash && base.memberIDs.contains($0.itemID)
+            }
+            checker.equal(trashed.count, base.memberCount - 2,
+                          "计划只为未勾选的成员生成清理操作")
+            checker.check(trashed.allSatisfy { !firstTwo.contains($0.itemID) },
+                          "被勾选保留的成员一个都不会被清理")
+            checker.check(trashed.allSatisfy { $0.reason.contains("等 2 份") },
+                          "清理理由标出了同组保留的份数")
+
+            // 全部勾选：等价于不清理
+            var allKept = dedup.groups
+            allKept[index].keepIDs = Set(base.memberIDs)
+            checker.check(allKept[index].allMembersKept, "全部勾选后识别为全部保留")
+            checker.equal(allKept[index].removableCount, 0, "全部勾选后不再产生待清理项")
+        } else {
+            checker.check(false, "没有可用于保留多选断言的 3 成员分组")
+        }
+
+        // 危险状态：保留集合为空时**绝不能**把整组都判成冗余
+        // （那样清理计划会把原件也移进回收站，属于不可接受的数据损失）
+        if let sample = dedup.groups.first {
+            var empty = sample
+            empty.keepIDs = []
+            checker.equal(empty.effectiveKeepIDs.count, 1,
+                          "保留集合为空时兜底保留一份")
+            checker.check(empty.effectiveKeepIDs.contains(sample.memberIDs[0]),
+                          "兜底保留的是组内首个成员")
+            checker.equal(empty.removableCount, sample.memberCount - 1,
+                          "保留集合为空时待清理数量仍是 成员数-1，而不是全部")
+            checker.equal(empty.reclaimableBytes(sizes: [:]),
+                          0, "空体积表下可释放空间为 0（不会误报）")
         }
 
         // ---------- 执行与撤销 ----------

@@ -332,20 +332,32 @@ final class AppState: ObservableObject {
 
     // MARK: - 重复项决策
 
-    func setKeep(groupID: UUID, memberID: UUID) {
+    /// 切换某个成员的「保留」勾选。**支持多选** —— 同组里想留几张就留几张。
+    ///
+    /// 不允许取消最后一个勾选：那样整组都会被当成冗余副本，清理计划会把原件也移进回收站。
+    /// 模型层 `effectiveKeepIDs` 还有一道兜底，这里只是不让用户走进那个状态。
+    func toggleKeep(groupID: UUID, memberID: UUID) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }),
-              let memberIndex = groups[index].memberIDs.firstIndex(of: memberID) else { return }
+              groups[index].memberIDs.contains(memberID) else { return }
         var group = groups[index]
-        group.keepID = memberID
+        if group.keepIDs.contains(memberID) {
+            guard group.keepIDs.count > 1 else { return }   // 至少保留一个
+            group.keepIDs.remove(memberID)
+        } else {
+            group.keepIDs.insert(memberID)
+        }
         group.keepReason = .manual
-        // 保留项移到首位，界面与其他计算都依赖这个约定
-        group.memberIDs.remove(at: memberIndex)
-        group.memberIDs.insert(memberID, at: 0)
         groups[index] = group
+        refreshDedupSummary()
+    }
+
+    /// 该成员是否是本组最后一个保留项 —— 是的话界面上要禁用取消勾选
+    func isLastKeep(_ itemID: UUID, in group: DuplicateGroup) -> Bool {
+        group.keepIDs.contains(itemID) && group.keepIDs.count <= 1
     }
 
     func isKeep(_ itemID: UUID, in group: DuplicateGroup) -> Bool {
-        group.keepID == itemID
+        group.keepIDs.contains(itemID)
     }
 
     /// 整组保留：本组不做任何清理，组内成员全部留下。
@@ -375,7 +387,7 @@ final class AppState: ObservableObject {
                                                           items: items,
                                                           treatAsIdentical: treatAsIdentical)
             groups[index].keepWholeGroup = false
-            groups[index].keepID = items[decision.index].id
+            groups[index].keepIDs = [items[decision.index].id]
             groups[index].keepReason = decision.reason
             if let memberIndex = members.firstIndex(of: items[decision.index].id), memberIndex != 0 {
                 var copy = groups[index]
@@ -509,8 +521,11 @@ final class AppState: ObservableObject {
         groups = groups.compactMap { group in
             var copy = group
             copy.memberIDs = copy.memberIDs.filter { liveIDs.contains($0) }
-            if let keep = copy.keepID, !liveIDs.contains(keep) {
-                copy.keepID = copy.memberIDs.first
+            // 已消失的文件可能正好在保留集合里，剔除后若空了就回落成首个成员
+            // （模型层的 effectiveKeepIDs 也会兜底，这里显式修一下让状态本身干净）
+            copy.keepIDs = copy.keepIDs.filter { liveIDs.contains($0) }
+            if copy.keepIDs.isEmpty, let first = copy.memberIDs.first {
+                copy.keepIDs = [first]
             }
             guard copy.memberIDs.count > 1 else { return nil }
             return copy

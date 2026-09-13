@@ -11,9 +11,10 @@ import AVKit
 struct MediaPreviewOverlay: View {
     let items: [MediaItem]
     @Binding var index: Int
-    let keepID: UUID?
+    /// 组内被标记保留的成员（可多选）
+    let keepIDs: Set<UUID>
     let keepWhole: Bool
-    let onSetKeep: (UUID) -> Void
+    let onToggleKeep: (UUID) -> Void
     let onReveal: (String) -> Void
     let onOpen: (String) -> Void
     let onClose: () -> Void
@@ -40,7 +41,10 @@ struct MediaPreviewOverlay: View {
     private var safeIndex: Int { min(max(0, index), max(0, items.count - 1)) }
     private var item: MediaItem? { items.isEmpty ? nil : items[safeIndex] }
     private var isVideo: Bool { item?.kind == .video }
-    private var isCurrentKept: Bool { item.map { keepID == $0.id } ?? false }
+    private var isCurrentKept: Bool { item.map { keepIDs.contains($0.id) } ?? false }
+
+    /// 当前这张是本组唯一的保留项 —— 不允许取消，否则整组都会变成待清理
+    private var isLastKeep: Bool { isCurrentKept && keepIDs.count <= 1 }
 
     var body: some View {
         ZStack {
@@ -107,17 +111,23 @@ struct MediaPreviewOverlay: View {
     private var quickActions: some View {
         if let item {
             if !keepWhole {
+                // 支持多选，所以这里是「切换」而不是「设为唯一保留」
                 Button {
-                    onSetKeep(item.id)
+                    onToggleKeep(item.id)
                 } label: {
-                    Label(isCurrentKept ? "已选为保留" : "设为保留",
+                    Label(isCurrentKept ? "取消保留" : "设为保留",
                           systemImage: isCurrentKept ? "checkmark.circle.fill" : "checkmark.circle")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isCurrentKept ? Palette.neutral : Palette.positive)
                 .controlSize(.small)
-                .disabled(isCurrentKept)
+                .disabled(isCurrentKept && isLastKeep)
+                .help(isCurrentKept
+                      ? (isLastKeep
+                         ? "本组至少需要保留一份，先勾选其它成员再取消这一份"
+                         : "取消保留，这张将进入待清理列表")
+                      : "标记为保留（可多选）")
             }
 
             Button {

@@ -187,16 +187,18 @@ enum HeadlessRunner {
         let byID = Dictionary(uniqueKeysWithValues: dedupResult.items.map { ($0.id, $0) })
 
         for (index, group) in dedupResult.groups.enumerated() {
-            print("\n[\(index + 1)] \(group.kind.displayName) · \(group.memberCount) 个成员 · 最大距离 \(group.maxDistance)")
+            let keep = group.effectiveKeepIDs
+            print("\n[\(index + 1)] \(group.kind.displayName) · \(group.memberCount) 个成员 · "
+                  + "最大距离 \(group.maxDistance) · 保留 \(keep.count) 份")
             for id in group.memberIDs {
                 guard let item = byID[id] else { continue }
-                let mark = id == group.keepID ? "保留" : "冗余"
+                let mark = keep.contains(id) ? "保留" : "冗余"
                 print("   \(mark)  \(item.capturedAtLabel)  \(item.resolutionLabel)  "
                       + "\(item.fileSizeLabel)  \(item.path)")
             }
-            if let reason = group.keepID {
-                print("   推荐保留理由：\(String(describing: group.keepReason.displayName)) → "
-                      + "\(byID[reason]?.fileName ?? "")")
+            if let first = group.memberIDs.first(where: { keep.contains($0) }) {
+                print("   推荐保留理由：\(group.keepReason.displayName) → "
+                      + "\(byID[first]?.fileName ?? "")")
             }
         }
         print("\n合计 \(dedupResult.summary.totalGroupCount) 组，冗余 \(dedupResult.summary.redundantFileCount) 个，"

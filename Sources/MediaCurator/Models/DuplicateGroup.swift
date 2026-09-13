@@ -59,15 +59,18 @@ enum KeepReason: String, Codable, Hashable {
 // MARK: - 重复组
 
 /// 一组互相重复或高度相似的媒体。
-/// `keepID` 为程序推荐保留的成员，用户可在界面上改选。
+///
+/// `keepIDs` 是用户决定保留的成员，**支持多选** —— 同组里「这几张都要留」是常态
+/// （连拍里挑中的两张、同一段视频的横竖两版），只允许留一个会逼着用户去手工操作。
+/// 程序检测时先给一个推荐项，用户再按需增减。
 struct DuplicateGroup: Identifiable, Hashable {
     let id: UUID
     var kind: DuplicateKind
-    /// 组内成员 id，按推荐保留顺序排序
+    /// 组内成员 id，首位是程序推荐保留的那个
     var memberIDs: [UUID]
-    /// 推荐保留项
-    var keepID: UUID?
-    /// 推荐理由
+    /// 用户决定保留的成员。空集合会被 `effectiveKeepIDs` 兜底，见那里的说明。
+    var keepIDs: Set<UUID>
+    /// 推荐理由（针对程序推荐的那一个成员）
     var keepReason: KeepReason = .manual
     /// 组内最大汉明距离（精确重复为 0）
     var maxDistance: Int = 0
@@ -84,7 +87,7 @@ struct DuplicateGroup: Identifiable, Hashable {
     init(id: UUID = UUID(),
          kind: DuplicateKind,
          memberIDs: [UUID],
-         keepID: UUID? = nil,
+         keepIDs: Set<UUID> = [],
          keepReason: KeepReason = .manual,
          maxDistance: Int = 0,
          mergedFrom: Int = 1,
@@ -92,7 +95,7 @@ struct DuplicateGroup: Identifiable, Hashable {
         self.id = id
         self.kind = kind
         self.memberIDs = memberIDs
-        self.keepID = keepID
+        self.keepIDs = keepIDs
         self.keepReason = keepReason
         self.maxDistance = maxDistance
         self.mergedFrom = mergedFrom
@@ -101,14 +104,36 @@ struct DuplicateGroup: Identifiable, Hashable {
 
     var memberCount: Int { memberIDs.count }
 
-    /// 除保留项外的成员数量，即可被清理的数量。整组保留时为 0。
-    var removableCount: Int { keepWholeGroup ? 0 : max(0, memberIDs.count - 1) }
+    /// 实际生效的保留集合。
+    ///
+    /// **空集合是危险状态**：那样整组都会被当成冗余副本，清理计划会把原件也移进回收站。
+    /// 界面上不允许取消最后一个勾选，这里再兜一层 —— 计划生成与摘要计算都只读这个属性，
+    /// 不直接读 `keepIDs`，任何路径都不该出现「一组全被判为冗余」。
+    var effectiveKeepIDs: Set<UUID> {
+        if keepIDs.isEmpty, let first = memberIDs.first { return [first] }
+        return keepIDs
+    }
+
+    /// 被保留的成员数
+    var keepCount: Int { effectiveKeepIDs.count }
+
+    /// 会被清理的成员数量。整组保留时为 0。
+    var removableCount: Int {
+        keepWholeGroup ? 0 : max(0, memberIDs.count - effectiveKeepIDs.count)
+    }
+
+    /// 组内是否每个成员都被标记为保留（此时等价于整组不清理，但语义不同：
+    /// 这是逐张勾选的结果，而 `keepWholeGroup` 是「这几张都要留」的整组决定）
+    var allMembersKept: Bool {
+        memberIDs.allSatisfy { effectiveKeepIDs.contains($0) }
+    }
 
     /// 本组可释放的字节数。整组保留时为 0。
     func reclaimableBytes(sizes: [UUID: Int64]) -> Int64 {
         guard !keepWholeGroup else { return 0 }
+        let keep = effectiveKeepIDs
         return memberIDs
-            .filter { $0 != keepID }
+            .filter { !keep.contains($0) }
             .reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
     }
 }
