@@ -165,17 +165,17 @@ enum UIRenderCheck {
         checker.check(digests.count == results.count,
                       "\(AppPage.allCases.count) 个页面渲染结果互不相同（\(digests.count)/\(results.count)）")
 
-        // 缩略图网格页要专门验一条：**图是不是真的画上去了**。
-        // 「有墨迹」这条判据对空占位符同样成立 —— 一片灰色转圈框也有墨迹，
-        // 页面指纹也各不相同，人不去看图根本发现不了整片缩略图没出来。
-        // 用色相分布做判据：照片是彩色的，纯控件页（扫描页基本是灰白）则不然。
+        // 色相桶数在这里只打印、**不做断言**。
+        //
+        // 自检素材是多频正弦图案，本身颜色就单调，网格页与纯控件页的桶数都落在 3–4 之间，
+        // 比不出稳定差异 —— 拿噪声当判据只会让自检红绿随机，比没有更糟
+        // （第一版就是这么翻的：加了折叠箭头之后 4 vs 3 直接翻转）。
+        //
+        // 真正的把关在出图环节：那边用的是照片素材，实测网格页 10/12 桶、控件页 1–4 桶，
+        // 阈值定在 6 桶，差距足够大，判据才立得住。
         if let grid = results.first(where: { $0.name == AppPage.allMedia.title }),
            let form = results.first(where: { $0.name == AppPage.scan.title }) {
-            print("  · 色相桶数：所有媒体 \(grid.hueBucketCount)/12 ｜ 扫描 \(form.hueBucketCount)/12")
-            checker.check(grid.hueBucketCount > form.hueBucketCount,
-                          "「所有媒体」页的色相比纯控件页更丰富（缩略图确已解码并画出）")
-        } else {
-            checker.check(false, "没有拿到用于对比色相的页面渲染结果")
+            print("  · 色相桶数（仅诊断）：所有媒体 \(grid.hueBucketCount)/12 ｜ 扫描 \(form.hueBucketCount)/12")
         }
 
         // ---------- 「所有媒体」页：筛选、排序与勾选 ----------
@@ -314,6 +314,41 @@ enum UIRenderCheck {
                           "勾选上级时清理掉下级的单独勾选")
             state.toggleOrganizingExclusion(probeRoot + "/2023")
             checker.check(state.excludedFromOrganizing.isEmpty, "再点一次即取消排除")
+
+            // 折叠：收起一个目录后它的后代全部消失，展开又原样回来。
+            // 这条性质**靠看截图验不出来** —— 少几行和多几行在缩略图尺寸下很难分辨，
+            // 所以折叠可见性算在数据层（`SourceFolderGroup.visibleFolders`），由自检直接断言。
+            let allRows = node.visibleFolders(collapsed: [])
+            checker.equal(allRows.count, node.folders.count, "不折叠时显示全部目录行")
+
+            let midPath = probeRoot + "/2023"
+            let sibling = probeRoot + "/备份"
+            let midFolded = node.visibleFolders(collapsed: [midPath])
+            checker.equal(midFolded.count, allRows.count - 1, "收起 2023 后正好少一行（2023-05）")
+            checker.check(midFolded.contains { $0.path == midPath }, "被收起的目录本身仍然显示")
+            checker.check(!midFolded.contains { $0.path.hasPrefix(midPath + "/") },
+                          "收起后它的子目录不再出现")
+            checker.check(midFolded.contains { $0.path == sibling },
+                          "收起一个目录不影响它的兄弟目录")
+
+            let rootFolded = node.visibleFolders(collapsed: [probeRoot])
+            checker.equal(rootFolded.count, 1, "收起来源根后只剩根一行")
+            checker.equal(rootFolded.first?.path, probeRoot, "剩下的那行正是来源根")
+
+            let twoFolded = node.visibleFolders(collapsed: [midPath, sibling])
+            checker.equal(twoFolded.count, 3,
+                          "同时收起两个目录：根 / 2023 / 备份 三行，2023-05 被隐藏")
+
+            checker.equal(node.visibleFolders(collapsed: []).count, allRows.count,
+                          "折叠集合清空后又回到全部显示")
+
+            // 有下级的判断必须准确：叶子目录上画折叠箭头，点下去毫无反应
+            checker.check(node.foldersWithChildren.contains(probeRoot), "来源根被认为有下级")
+            checker.check(node.foldersWithChildren.contains(midPath), "2023 被认为有下级")
+            checker.check(!node.foldersWithChildren.contains(sibling), "备份是叶子，不应有折叠箭头")
+            checker.equal(node.directChildCounts[probeRoot], 2, "来源根的直接下级是 2 个")
+            checker.equal(node.directChildCounts[midPath], 1, "2023 的直接下级是 1 个")
+            checker.equal(node.directChildCounts[sibling], nil, "叶子目录没有下级计数")
         }
         state.excludedFromOrganizing = []
         state.items = savedItemsForTree

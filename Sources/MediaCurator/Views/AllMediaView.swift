@@ -15,6 +15,11 @@ struct AllMediaView: View {
     /// 来源目录树默认展开：这是「这一页能看到哪些目录、哪些目录不参与整理」的唯一入口，
     /// 折叠着的话用户根本不知道有这回事。嫌占地方再收起来。
     @State private var showFolderTree = true
+    /// 被收起子目录的路径。
+    ///
+    /// 存路径而不是下标或 id：重新扫描后目录树会重建，只有路径在两次之间是稳定的。
+    /// 这也是临时浏览状态，不持久化 —— 下次打开全部展开，比记住一堆收起状态更符合预期。
+    @State private var collapsedFolders: Set<String> = []
 
     var body: some View {
         // 筛选结果、重复角色、目录树各算一次就够。它们都是 O(文件数) 甚至 O(n log n)
@@ -255,41 +260,69 @@ struct AllMediaView: View {
     private func sourceFolderPanel(_ groups: [SourceFolderGroup]) -> some View {
         let subfolderCount = groups.reduce(0) { $0 + max(0, $1.folders.count - 1) }
         let excludedCount = state.excludedFromOrganizing.count
+        // 折叠只对「有下级的目录」有意义；一个都没有时那两个按钮不该出现
+        let parentsWithChildren = groups.reduce(into: Set<String>()) {
+            $0.formUnion($1.foldersWithChildren)
+        }
+        let allCollapsed = !parentsWithChildren.isEmpty
+            && collapsedFolders.isSuperset(of: parentsWithChildren)
 
         if !groups.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.14)) { showFolderTree.toggle() }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: showFolderTree ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 10)
-                        Image(systemName: "folder.on.circle")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Palette.accent)
-                        Text("来源目录")
-                            .font(.system(size: 12.5, weight: .semibold))
-                        Text("\(groups.count) 个来源 · \(subfolderCount) 个子目录")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        if excludedCount > 0 {
-                            TagChip(text: "已排除 \(excludedCount) 个不参与整理",
-                                    tint: Palette.caution, filled: false)
-                                .fixedSize()
-                            Button("全部恢复") {
-                                state.excludedFromOrganizing.removeAll()
-                                state.persistPreferences()
-                            }
-                            .controlSize(.small)
-                            .help("清除所有「不参与整理」的勾选，全部目录重新参与归档")
+                // 头部刻意**不是**一个大 Button 里嵌几个小按钮 —— 那样嵌套的按钮
+                // 点击会串到外层（点「全部恢复」可能连带把整块折起来）。
+                // 这里拆成：左侧标题区一个按钮，右侧动作各自独立。
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.14)) { showFolderTree.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: showFolderTree ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 10)
+                            Image(systemName: "folder.on.circle")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Palette.accent)
+                            Text("来源目录")
+                                .font(.system(size: 12.5, weight: .semibold))
+                            Text("\(groups.count) 个来源 · \(subfolderCount) 个子目录")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
                         }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .help(showFolderTree ? "收起目录树" : "展开目录树")
+
+                    Spacer(minLength: 8)
+
+                    if showFolderTree && !parentsWithChildren.isEmpty {
+                        Button(allCollapsed ? "全部展开" : "全部折叠") {
+                            withAnimation(.easeInOut(duration: 0.12)) {
+                                if allCollapsed {
+                                    collapsedFolders.subtract(parentsWithChildren)
+                                } else {
+                                    collapsedFolders.formUnion(parentsWithChildren)
+                                }
+                            }
+                        }
+                        .controlSize(.small)
+                        .help(allCollapsed ? "展开所有子目录" : "只留下每个目录的第一层")
+                    }
+
+                    if excludedCount > 0 {
+                        TagChip(text: "已排除 \(excludedCount) 个不参与整理",
+                                tint: Palette.caution, filled: false)
+                            .fixedSize()
+                        Button("全部恢复") {
+                            state.excludedFromOrganizing.removeAll()
+                            state.persistPreferences()
+                        }
+                        .controlSize(.small)
+                        .help("清除所有「不参与整理」的勾选，全部目录重新参与归档")
+                    }
                 }
-                .buttonStyle(.plain)
 
                 if showFolderTree {
                     VStack(alignment: .leading, spacing: 0) {
@@ -317,8 +350,17 @@ struct AllMediaView: View {
 
     @ViewBuilder
     private func folderGroupRows(_ group: SourceFolderGroup) -> some View {
+        let withChildren = group.foldersWithChildren
+        let childCounts = group.directChildCounts
+        // 折叠后要显示的行由数据层的纯函数算（自检直接断言同一套逻辑）
+        let rows = group.visibleFolders(collapsed: collapsedFolders)
+        let rootCollapsed = collapsedFolders.contains(group.root)
+
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
+                collapseChevron(path: group.root,
+                                hasChildren: withChildren.contains(group.root),
+                                isCollapsed: rootCollapsed)
                 Image(systemName: "externaldrive")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -332,6 +374,11 @@ struct AllMediaView: View {
                     .truncationMode(.middle)
                     .help(group.root)
                 Spacer(minLength: 8)
+                if rootCollapsed, group.folders.count > 1 {
+                    Text("已收起 \(group.folders.count - 1) 个子目录")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
                 Text("\(group.totalFileCount) 个文件")
                     .font(.system(size: 10.5, design: .rounded))
                     .foregroundStyle(.secondary)
@@ -339,19 +386,56 @@ struct AllMediaView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
 
-            ForEach(group.folders.filter { $0.depth > 0 }) { folder in
-                folderRow(folder)
+            ForEach(rows.filter { $0.depth > 0 }) { folder in
+                folderRow(folder,
+                          hasChildren: withChildren.contains(folder.path),
+                          childCount: childCounts[folder.path] ?? 0)
             }
         }
         .padding(.bottom, 4)
     }
 
-    private func folderRow(_ folder: SourceSubfolder) -> some View {
+    /// 折叠箭头。
+    ///
+    /// 叶子目录也画一个**等宽的透明占位**：不占位的话，有下级和没下级的行会左右错开一格，
+    /// 看起来像缩进算错了，而缩进在这棵树里是有含义的（它表示层级）。
+    @ViewBuilder
+    private func collapseChevron(path: String, hasChildren: Bool, isCollapsed: Bool) -> some View {
+        if hasChildren {
+            Button {
+                withAnimation(.easeInOut(duration: 0.12)) { toggleCollapse(path) }
+            } label: {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isCollapsed ? "展开子目录" : "收起子目录")
+        } else {
+            Color.clear.frame(width: 14, height: 14)
+        }
+    }
+
+    private func toggleCollapse(_ path: String) {
+        if collapsedFolders.contains(path) {
+            collapsedFolders.remove(path)
+        } else {
+            collapsedFolders.insert(path)
+        }
+    }
+
+    private func folderRow(_ folder: SourceSubfolder,
+                           hasChildren: Bool,
+                           childCount: Int) -> some View {
         // 「自己勾的」与「随上级被排除」是两种状态：前者能取消，后者要先去取消上级。
         // 界面上必须分开呈现，否则用户会对着一个点不动的开关反复点。
         let excluded = folder.isExcluded || folder.isInherited
+        let isCollapsed = collapsedFolders.contains(folder.path)
         return HStack(spacing: 8) {
             Spacer(minLength: 0).frame(width: CGFloat(max(0, folder.depth - 1)) * 14)
+            collapseChevron(path: folder.path, hasChildren: hasChildren, isCollapsed: isCollapsed)
             Image(systemName: excluded ? "folder.badge.minus" : "folder")
                 .font(.system(size: 11))
                 .foregroundStyle(folder.isExcluded ? Palette.caution : .secondary)
@@ -362,6 +446,12 @@ struct AllMediaView: View {
                 .truncationMode(.middle)
                 .foregroundStyle(excluded ? .secondary : .primary)
                 .help(folder.path)
+            if isCollapsed, childCount > 0 {
+                // 收起之后光看名字不知道里面有多少，给个数
+                Text("已收起 \(childCount) 个子目录")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
             Spacer(minLength: 8)
 
             if folder.fileCount > 0 {

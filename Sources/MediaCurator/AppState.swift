@@ -142,6 +142,51 @@ struct SourceFolderGroup: Identifiable {
     var totalBytes: Int64
 
     var excludedCount: Int { folders.filter { $0.isExcluded }.count }
+
+    /// 有下级的目录 —— 折叠箭头只在有下级时才画。
+    /// 给叶子目录也画一个，点下去毫无反应，用户会当成坏了。
+    var foldersWithChildren: Set<String> {
+        var result: Set<String> = []
+        for index in folders.indices where index + 1 < folders.count {
+            // 先序序列里，紧邻的下一行层级更深，就说明当前这一行有子节点
+            if folders[index + 1].depth > folders[index].depth {
+                result.insert(folders[index].path)
+            }
+        }
+        return result
+    }
+
+    /// 每个目录的**直接**下级数量（不含更深的后代）—— 折叠起来时要显示「里面有几个」
+    var directChildCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for folder in folders where folder.depth > 0 {
+            let parent = PathTools.normalized((folder.path as NSString).deletingLastPathComponent)
+            counts[parent, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// 按折叠状态算出实际要显示的行。
+    ///
+    /// 抽成数据层的纯函数而不是写在视图里，是为了**能被自检直接断言** ——
+    /// 「收起一个目录后它的后代全部消失、再展开又原样回来」这种性质，
+    /// 靠看截图是验不出来的（少几行和多几行在缩略图上很难分辨）。
+    ///
+    /// 依赖「字典序即先序」这个前提：子树在数组里一定是连续的一段，
+    /// 所以只要记住当前折叠到哪一层，跳过层级更深的行即可，一次遍历完成。
+    func visibleFolders(collapsed: Set<String>) -> [SourceSubfolder] {
+        var result: [SourceSubfolder] = []
+        var collapsedDepth: Int?
+        for folder in folders {
+            if let depth = collapsedDepth {
+                if folder.depth > depth { continue }   // 仍在收起的子树里
+                collapsedDepth = nil                   // 回到了同层或更外层
+            }
+            result.append(folder)
+            if collapsed.contains(folder.path) { collapsedDepth = folder.depth }
+        }
+        return result
+    }
 }
 
 struct SourceSubfolder: Identifiable {
