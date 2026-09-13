@@ -57,10 +57,15 @@ struct OrganizeView: View {
                                      subtitle: "把重复组里未被保留的副本移入系统回收站",
                                      isOn: $state.filter.cleanRedundantDuplicates)
                     }
-                    .frame(width: 330)
+                    .frame(maxWidth: optionColumnWidth, alignment: .leading)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("搬运方式").font(.system(size: 12))
+                    // 与其它选项行同一套排版：标签在左、控件贴齐列右边缘、说明另起一行。
+                    // 原先这里是「标签独占一行、控件在下一行、说明再一行」，
+                    // 和同页面其它行摆在一起就是两种格式。
+                    OptionRow(title: "搬运方式",
+                              hint: state.rule.transferMode == .move
+                                  ? "移动：整理后原位置不再保留文件，可真正腾出空间。"
+                                  : "复制：原文件保持不动，适合先验证规则是否正确。") {
                         Picker("", selection: $state.rule.transferMode) {
                             ForEach(TransferMode.allCases, id: \.self) { mode in
                                 Text(mode.displayName).tag(mode)
@@ -69,14 +74,8 @@ struct OrganizeView: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .frame(width: 170)
-                        Text(state.rule.transferMode == .move
-                             ? "移动：整理后原位置不再保留文件，可真正腾出空间。"
-                             : "复制：原文件保持不动，适合先验证规则是否正确。")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(width: 300, alignment: .leading)
                     }
+                    .frame(maxWidth: optionColumnWidth, alignment: .leading)
 
                     Spacer()
                 }

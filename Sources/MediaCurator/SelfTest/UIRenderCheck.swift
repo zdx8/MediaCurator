@@ -54,6 +54,17 @@ enum UIRenderCheck {
         /// 而不是画到画布外面 —— 顶部那条带量不到它，只能整幅量。
         var fullLeadingEdgeInk: Double = 0
         var fullTrailingEdgeInk: Double = 0
+        /// 左侧 45% 与右侧 12% 两块区域里，最上面那一行有墨的纵向位置（点）。
+        /// 见「控件位置不随描述行数变化」那条判据的说明。
+        var leftInkTop: Double?
+        var rightInkTop: Double?
+        /// 画面中部**浅色块**的下沿（点）。
+        ///
+        /// 用的是比墨迹低得多的阈值（0.03）：卡片底色只有 7% 的不透明度，
+        /// 按墨迹那套 0.10 的阈值根本测不到。用来验「卡片高度是否一致」——
+        /// 高度差是十几个点，但没有任何文字落在差出来的那一行上（说明行留空时更是如此），
+        /// 只能量底色的边界。
+        var panelBottom: Double?
     }
 
     /// 把主色解析成具体分量。显式指定 sRGB —— SwiftUI 的 `Color(red:green:blue:)`
@@ -703,6 +714,75 @@ enum UIRenderCheck {
                           String(format: "缩略图缓存命中（第二次耗时 %.4f 秒）", elapsed))
         }
 
+        // ---------- 控件位置不随描述行数变化 ----------
+        //
+        // 开关曾经写成 `Toggle { VStack { 标题; 描述 } }`，SwiftUI 会把开关**垂直居中到
+        // 两行文字中间** —— 于是「描述占一行」的行与「描述占三四行」的行，开关的纵向位置
+        // 各不相同，一列看下来参差不齐。而描述的长短本来就无法统一，所以只能让开关的位置
+        // 不去依赖它。现改成「控件与标题同行、描述另起一行」（`CheckRow` 直接复用 `OptionRow`）。
+        //
+        // 这种「差几个点」的问题截图里根本看不出来，只能量：分别渲染描述一行与描述多行的
+        // 同一个开关行，取左侧最上面的墨（标题）与右侧最上面的墨（开关），
+        // 两者的纵向偏移必须一致。
+        func switchOffset(hint: String) async -> Double? {
+            let sample = await render(name: "行内控件-\(hint.count)字",
+                                      size: CGSize(width: 520, height: 140),
+                                      content: {
+                AnyView(VStack(alignment: .leading, spacing: 10) {
+                    CheckRow(title: "包含图片", subtitle: hint, isOn: .constant(true))
+                }
+                .padding(20))
+            })
+            guard let sample, let left = sample.leftInkTop, let right = sample.rightInkTop else {
+                return nil
+            }
+            return right - left
+        }
+        let shortHintOffset = await switchOffset(hint: "一行说明")
+        let longHintOffset = await switchOffset(
+            hint: "这一句说明明显更长，会折成好几行，用来把描述的行数拉开，好验证开关的位置不会跟着它跑。")
+        if let shortHintOffset, let longHintOffset {
+            let delta = abs(shortHintOffset - longHintOffset)
+            print(String(format: "  · 开关相对标题的纵向偏移：短描述 %.1f 点 ｜ 长描述 %.1f 点（差 %.1f）",
+                         shortHintOffset, longHintOffset, delta))
+            checker.check(delta <= 2.0,
+                          "开关位置不随描述行数变化（偏移差 \(String(format: "%.1f", delta)) 点）")
+        } else {
+            checker.check(false, "行内控件对齐判据渲染失败（取不到墨迹位置）")
+        }
+
+        // ---------- 卡片高度一致 ----------
+        //
+        // 一行的几张统计卡里，有的有副标题、有的没有。副标题那一行不占位的话，
+        // 有副标题的卡就比没说明的高一行，摆在同一行里下沿参差不齐。
+        // 卡片按内容自撑高度，所以「统一高度」只能靠让内容行数一致来保证
+        // （`StatCard` 里副标题缺省时放一个空格）。
+        //
+        // 只能量**底色下沿**：差出来的那一行上没有任何文字，墨迹判据测不到；
+        // 底色只有 7% 不透明度，所以这里用比墨迹低得多的阈值。
+        func cardBottom(subtitle: String?) async -> Double? {
+            let sample = await render(name: "卡片高度-\(subtitle == nil ? "无副标题" : "有副标题")",
+                                      size: CGSize(width: 520, height: 160),
+                                      content: {
+                AnyView(VStack(spacing: 12) {
+                    StatCard(title: "文件总数", value: "1234", subtitle: subtitle,
+                             symbol: "photo.on.rectangle")
+                }
+                .padding(20))
+            })
+            return sample?.panelBottom
+        }
+        if let withSubtitle = await cardBottom(subtitle: "耗时 12.3 秒"),
+           let withoutSubtitle = await cardBottom(subtitle: nil) {
+            let delta = abs(withSubtitle - withoutSubtitle)
+            print(String(format: "  · 卡片下沿：有副标题 %.1f 点 ｜ 无副标题 %.1f 点（差 %.1f）",
+                         withSubtitle, withoutSubtitle, delta))
+            checker.check(delta <= 2.0,
+                          "有无副标题的卡片高度一致（下沿差 \(String(format: "%.1f", delta)) 点）")
+        } else {
+            checker.check(false, "卡片高度判据渲染失败（取不到底色下沿）")
+        }
+
         // ---------- 「检查重复媒体」开关 ----------
         // 关掉它应该只跳过比对：文件照样入库、「所有媒体」页照常有内容，
         // 而分组与摘要必须一并清零 —— 每次扫描的 `MediaItem.id` 都是新的，
@@ -1299,6 +1379,51 @@ enum UIRenderCheck {
         let edges = edgeInk(band: Int(140 * topScale))
         let fullEdges = edgeInk(band: height)
 
+        // 左右两块区域里「最上面那一行有墨的像素」在纵向的位置（换算回点）。
+        //
+        // 用途是验一条排版不变量：**控件的位置不能取决于描述有几行**。
+        // 以前开关是用 `Toggle { VStack { 标题; 描述 } }` 写的，SwiftUI 把开关垂直居中到
+        // 两行文字中间 —— 描述占一行的行和占三行的行，开关的纵向位置就各不相同，
+        // 一列看下来参差不齐。这种「差几个点」的问题截图里看不出来，只能量。
+        func inkTop(xRange: ClosedRange<Int>) -> Double? {
+            func value(_ x: Int, _ y: Int) -> Double? {
+                guard let raw = rep.colorAt(x: x, y: y),
+                      let color = raw.usingColorSpace(rep.colorSpace) else { return nil }
+                return 0.299 * Double(color.redComponent)
+                    + 0.587 * Double(color.greenComponent)
+                    + 0.114 * Double(color.blueComponent)
+            }
+            let step = max(1, Int(1 * topScale))
+            for y in stride(from: 0, to: height, by: step) {
+                for x in stride(from: xRange.lowerBound, through: xRange.upperBound, by: step) {
+                    if let v = value(x, y), abs(v - median) > 0.10 { return Double(y) / topScale }
+                }
+            }
+            return nil
+        }
+        let leftTop = inkTop(xRange: 0...(width * 45 / 100))
+        let rightTop = inkTop(xRange: (width * 88 / 100)...(width - 1))
+
+        // 浅色块的下沿：从中部取样（避开左右边缘的圆角），自下而上找第一行
+        // 「与背景差异 > 0.03」的像素。卡片底色只有 7% 不透明度，阈值必须比墨迹低。
+        func panelBottomEdge() -> Double? {
+            func value(_ x: Int, _ y: Int) -> Double? {
+                guard let raw = rep.colorAt(x: x, y: y),
+                      let color = raw.usingColorSpace(rep.colorSpace) else { return nil }
+                return 0.299 * Double(color.redComponent)
+                    + 0.587 * Double(color.greenComponent)
+                    + 0.114 * Double(color.blueComponent)
+            }
+            let step = max(1, Int(1 * topScale))
+            for y in stride(from: height - 1, through: 0, by: -step) {
+                for x in stride(from: width * 20 / 100, to: width * 80 / 100, by: step) {
+                    if let v = value(x, y), abs(v - median) > 0.03 { return Double(y) / topScale }
+                }
+            }
+            return nil
+        }
+        let panelBottom = panelBottomEdge()
+
         return RenderResult(name: name,
                             width: width,
                             height: height,
@@ -1310,7 +1435,10 @@ enum UIRenderCheck {
                             trailingEdgeInk: edges.trailing,
                             hueBucketCount: hueBuckets.count,
                             fullLeadingEdgeInk: fullEdges.leading,
-                            fullTrailingEdgeInk: fullEdges.trailing)
+                            fullTrailingEdgeInk: fullEdges.trailing,
+                            leftInkTop: leftTop,
+                            rightInkTop: rightTop,
+                            panelBottom: panelBottom)
     }
 
     /// 把颜色映射到 12 个色相桶之一；灰色与接近全黑 / 全白的不计入（返回 nil）。

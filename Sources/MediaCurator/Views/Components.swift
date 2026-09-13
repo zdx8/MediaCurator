@@ -154,12 +154,15 @@ struct StatCard: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            if let subtitle {
-                Text(subtitle)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
+            // 说明行**始终占位**（没有说明时放一个空格）。
+            // 少了这一行，有说明的卡就比没说明的高一行 —— 摆在同一行里，
+            // 下沿参差不齐（在 HStack 里垂直居中之后更明显）。
+            // 卡片是按内容自撑高度的，所以「统一高度」只能靠让内容行数一致来保证，
+            // 钉死一个高度反而会在换字体或数值变长时裁掉内容。
+            Text(subtitle ?? " ")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -482,22 +485,27 @@ struct PageHeader: View {
 
 // MARK: - 复选行
 
+/// 带开关的选项行。
+///
+/// **开关落在标题那一行，描述另起一行。** 原先用的是 `Toggle { VStack { 标题; 描述 } }` ——
+/// 开关会被垂直居中到两行文字中间，于是描述只有一行的行和描述折成两行的行，
+/// 开关的纵向位置各不相同，一列看下来参差不齐。而描述的长短本来就无法统一，
+/// 所以只能让开关的位置**不依赖描述有几行**。
+///
+/// 排版直接复用 `OptionRow`：这几类行（开关 / 输入框 / 下拉框）现在共用同一套
+/// 「控件贴齐右边缘、描述在下一行」的规则，将来加新的控件类型也不会又长出一个样子。
 struct CheckRow: View {
     var title: String
     var subtitle: String?
     @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(isOn: $isOn) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.system(size: 12))
-                if let subtitle {
-                    Text(subtitle).font(.system(size: 10.5)).foregroundStyle(.tertiary)
-                }
-            }
+        OptionRow(title: title, hint: subtitle) {
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
     }
 }
 
