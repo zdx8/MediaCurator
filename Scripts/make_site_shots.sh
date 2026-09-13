@@ -34,16 +34,23 @@ mkdir -p "$OUT"
 
 # 渲染图是屏幕缩放比下的原始像素（本机 2x）。缩到网页尺寸后，
 # 页面按 1x CSS 像素展示时正好是 2 倍密度，在 Retina 屏上不糊。
-emit() { # <源文件（不含扩展名）> <目标文件名> <宽> <高>
+emit() { # <源文件（不含扩展名）> <目标文件名> <宽> <高> [png|jpg]
   local src="$WORK/shots/$1.png"
+  local fmt="${5:-png}"
   if [ ! -f "$src" ]; then
     echo "  ✗ 缺少渲染图：$1.png"
     return 1
   fi
-  sips -z "$4" "$3" "$src" --out "$OUT/$2" >/dev/null
+  if [ "$fmt" = "jpg" ]; then
+    # 内容是一整张照片、没有大片纯色，PNG 无损在这里换不到画质，
+    # 体积却是 JPEG 的五六倍（实测 1.3 MB → 0.2 MB）。
+    sips -z "$4" "$3" -s format jpeg -s formatOptions 82 "$src" --out "$OUT/$2" >/dev/null
+  else
+    sips -z "$4" "$3" "$src" --out "$OUT/$2" >/dev/null
+  fi
   local size
   size="$(sips -g pixelWidth -g pixelHeight "$OUT/$2" | awk '/pixel/{printf "%s ", $2}')"
-  printf '  · %-30s %s\n' "$2" "$size"
+  printf '  · %-30s %s %s\n' "$2" "$size" "$(du -h "$OUT/$2" | cut -f1)"
 }
 
 emit "0-总览-浅色"        "overview-light.png"        1800 1138
@@ -55,11 +62,11 @@ emit "2-重复项-都不保留"  "duplicates-discard-all.png" 1400  925
 emit "3-整理规则"         "organize.png"              1400  925
 emit "4-执行计划"         "plan.png"                  1400  925
 emit "5-操作日志"         "journal.png"               1400  925
-emit "6-放大预览"         "preview-image.png"         1400  925
+emit "6-放大预览"         "preview-image.jpg"         1400  925 jpg
 emit "7-视频预览"         "preview-video.png"         1400  925
 
-# 旧版本遗留的 jpg 版本，避免仓库里留着没人引用的文件
-rm -f "$OUT/preview-image.jpg"
+# 各图的另一种格式若曾存在过，清掉，避免仓库里留着没人引用的文件
+rm -f "$OUT/preview-image.png"
 
 rm -rf "$WORK"
 
