@@ -248,6 +248,21 @@ code {
 .shot-hero img { box-shadow: var(--shadow-lg); }
 .shot-wide { margin-top: 56px; }
 
+/* 浅色 / 深色 两张并排 */
+.shot-pair {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 56px;
+}
+.shot-pair .shot figcaption { margin-top: 9px; }
+.pair-note {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--text-mute);
+}
+
 /* ---------- 通用区块 ---------- */
 .section { padding: 84px 0; }
 .section-alt { background: var(--bg-alt); }
