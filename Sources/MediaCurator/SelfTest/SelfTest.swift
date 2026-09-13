@@ -546,6 +546,59 @@ enum SelfTest {
             checker.check(false, "没有可用于归档计划断言的分组")
         }
 
+        // ---------- 所有媒体页：手动勾选清理 ----------
+        // 这条路径绕开了重复项的推荐逻辑：用户可以直接勾中某个组的原件，程序不拦。
+        // 所以断言的重点不是「能不能生成」，而是**范围必须逐字对应** ——
+        // 勾了几个就只清几个，既不能少（被规则悄悄过滤掉）也不能多（顺带清掉没勾的）。
+        checker.section("所有媒体页：手动勾选清理")
+
+        if dedup.items.count >= 3 {
+            let picked = Array(dedup.items.prefix(2))
+            let pickedIDs = Set(picked.map { $0.id })
+            let manual = PlanBuilder.buildTrashOnly(items: dedup.items,
+                                                    selectedIDs: pickedIDs,
+                                                    groups: dedup.groups)
+            checker.equal(manual.operations.count, 2, "勾选 2 个就只生成 2 行")
+            checker.check(manual.operations.allSatisfy { $0.kind == .trash },
+                          "手动清理只产生「移入回收站」操作，不含任何归档")
+            checker.equal(Set(manual.operations.map { $0.itemID }), pickedIDs,
+                          "计划覆盖的正是勾选的那几个，不多不少")
+            checker.equal(manual.operations.map { $0.itemID }, picked.map { $0.id },
+                          "计划行顺序与扫描结果一致（不随字典遍历顺序漂移）")
+            checker.equal(manual.summary.reclaimableBytes,
+                          picked.reduce(Int64(0)) { $0 + $1.fileSize },
+                          "可释放体积等于勾选文件体积之和")
+
+            let empty = PlanBuilder.buildTrashOnly(items: dedup.items,
+                                                   selectedIDs: [],
+                                                   groups: dedup.groups)
+            checker.equal(empty.operations.count, 0, "没有勾选时不产生任何操作")
+
+            // 勾中整组：这条路径没有「至少留一份」的兜底，必须点名提醒
+            if let group = dedup.groups.first(where: { $0.memberCount >= 2 }) {
+                let whole = PlanBuilder.buildTrashOnly(items: dedup.items,
+                                                       selectedIDs: Set(group.memberIDs),
+                                                       groups: dedup.groups)
+                checker.equal(whole.operations.count, group.memberCount,
+                              "整组勾选时 \(group.memberCount) 个成员全部进计划")
+                checker.check(whole.warnings.contains { $0.contains("全部成员") },
+                              "勾选覆盖整组时提示「该组不会留下任何一份」")
+                checker.check(whole.warnings.contains { $0.contains("保留") },
+                              "勾中保留项时提示「保留决定不会阻止这里的清理」")
+            } else {
+                checker.check(false, "没有可用于整组勾选断言的分组")
+            }
+
+            // 只勾一个不该出现任何「整组」提示 —— 否则提示会因为太吵而被忽略
+            let single = PlanBuilder.buildTrashOnly(items: dedup.items,
+                                                    selectedIDs: [picked[0].id],
+                                                    groups: dedup.groups)
+            checker.check(!single.warnings.contains { $0.contains("全部成员") },
+                          "只勾一个成员时不出现整组提示")
+        } else {
+            checker.check(false, "素材不足，无法验证手动勾选清理")
+        }
+
         // ---------- 执行与撤销 ----------
         checker.section("执行与撤销")
 

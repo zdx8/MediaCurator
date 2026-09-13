@@ -6,6 +6,7 @@ import AppKit
 
 enum AppPage: String, CaseIterable, Identifiable {
     case scan
+    case allMedia
     case duplicates
     case organize
     case plan
@@ -16,6 +17,7 @@ enum AppPage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .scan: return "扫描"
+        case .allMedia: return "所有媒体"
         case .duplicates: return "重复项"
         case .organize: return "整理规则"
         case .plan: return "执行计划"
@@ -26,6 +28,7 @@ enum AppPage: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .scan: return "选择目录、读取拍摄信息"
+        case .allMedia: return "浏览全部文件，勾选要清理的"
         case .duplicates: return "审阅并决定保留哪一份"
         case .organize: return "目录结构与命名规则"
         case .plan: return "确认每一项改动"
@@ -36,6 +39,7 @@ enum AppPage: String, CaseIterable, Identifiable {
     var symbolName: String {
         switch self {
         case .scan: return "magnifyingglass.circle"
+        case .allMedia: return "square.grid.2x2"
         case .duplicates: return "square.on.square.dashed"
         case .organize: return "folder.badge.gearshape"
         case .plan: return "list.bullet.rectangle"
@@ -46,12 +50,115 @@ enum AppPage: String, CaseIterable, Identifiable {
     var step: Int {
         switch self {
         case .scan: return 1
-        case .duplicates: return 2
-        case .organize: return 3
-        case .plan: return 4
-        case .journal: return 5
+        case .allMedia: return 2
+        case .duplicates: return 3
+        case .organize: return 4
+        case .plan: return 5
+        case .journal: return 6
         }
     }
+
+    /// 官网截图用的稳定文件名。
+    ///
+    /// 刻意**不带步骤序号** —— 序号会随导航插入新页面而整体后移，
+    /// 截图名跟着漂移就会让 `make_site_shots.sh` 里那张对照表失配
+    /// （改了导航，官网截图静默少一张或错位）。文件名只跟页面身份绑定。
+    var shotName: String {
+        switch self {
+        case .scan: return "scan"
+        case .allMedia: return "all-media"
+        case .duplicates: return "duplicates"
+        case .organize: return "organize"
+        case .plan: return "plan"
+        case .journal: return "journal"
+        }
+    }
+}
+
+// MARK: - 「所有媒体」页的浏览筛选
+
+/// 只决定这一页**看到**哪些文件，不参与计划生成。
+///
+/// 与 `PlanFilter` 刻意分开：那个是「这次要做什么操作」，这个是「现在想看什么」。
+/// 合并成一个的话，用户为了找一张照片而临时改的筛选，会连带改变生成计划的范围。
+struct MediaFilter: Equatable {
+    enum Kind: String, CaseIterable, Identifiable {
+        case all, image, video
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .all: return "全部"
+            case .image: return "图片"
+            case .video: return "视频"
+            }
+        }
+
+        var mediaKind: MediaKind? {
+            switch self {
+            case .all: return nil
+            case .image: return .image
+            case .video: return .video
+            }
+        }
+    }
+
+    enum Sort: String, CaseIterable, Identifiable {
+        case capturedDesc, capturedAsc, name, sizeDesc
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .capturedDesc: return "拍摄时间 新→旧"
+            case .capturedAsc: return "拍摄时间 旧→新"
+            case .name: return "文件名"
+            case .sizeDesc: return "体积 大→小"
+            }
+        }
+    }
+
+    var kind: Kind = .all
+    var sort: Sort = .capturedDesc
+    var keyword: String = ""
+
+    var isDefault: Bool {
+        kind == .all && sort == .capturedDesc && keyword.isEmpty
+    }
+}
+
+// MARK: - 来源目录树
+
+/// 一个来源目录，以及它下面出现过的所有子目录。
+struct SourceFolderGroup: Identifiable {
+    var id: String { root }
+    /// 来源目录的绝对路径
+    var root: String
+    var name: String
+    /// 含根在内、按路径字典序排列 —— 字典序等价于树的先序，直接顺序渲染即可
+    var folders: [SourceSubfolder]
+    var totalFileCount: Int
+    var totalBytes: Int64
+
+    var excludedCount: Int { folders.filter { $0.isExcluded }.count }
+}
+
+struct SourceSubfolder: Identifiable {
+    var id: String { path }
+    var path: String
+    var name: String
+    /// 相对来源根的层级，根为 0
+    var depth: Int
+    /// 直接放在这个目录里的文件数与体积（不含子目录）
+    var fileCount: Int
+    var bytes: Int64
+    /// 含子目录在内的文件总数
+    var totalFileCount: Int
+    /// 用户是否勾选了「不参与整理」
+    var isExcluded: Bool
+    /// 上级目录已被排除（自己没勾，但连带不参与）—— 界面要区分这两种状态
+    var isInherited: Bool
 }
 
 // MARK: - 提示
@@ -111,7 +218,33 @@ final class AppState: ObservableObject {
     @Published var isDedupRunning = false
     @Published var scannedOnce = false
 
+    // MARK: 「所有媒体」页
+    /// 勾选准备移入回收站的文件。
+    ///
+    /// 与「重复项」页的整组决定是两条独立的路：那边由程序判定哪几份算冗余，
+    /// 这边由用户直接点名。两者最终都只生成 `trash` 操作，但各有各的生成入口，
+    /// 不会互相覆盖 —— 在这页勾选不会改变任何一个重复组的决定。
+    @Published var cleanupSelection: Set<UUID> = []
+    @Published var mediaFilter = MediaFilter()
+
+    /// 勾选了「不参与整理」的子目录（绝对路径）。
+    ///
+    /// 存路径而不是别的引用：重新扫描后目录内容会变、`MediaItem.id` 全部重来，
+    /// 只有路径在两次扫描之间是稳定的。
+    ///
+    /// 作用范围刻意收窄成**只影响归档**（按模板移动 / 重命名）。重复项的清理
+    /// 与这一页的手动勾选清理都不受它影响 —— 前者由程序判定哪些是冗余副本，
+    /// 后者由用户逐张点名，两者都与「目录结构要不要重排」无关。
+    @Published var excludedFromOrganizing: Set<String> = []
+
     let cache = FingerprintCache()
+
+    /// 自检专用：置为 true 后 `persistPreferences()` 不再写 `UserDefaults`。
+    ///
+    /// 自检驱动的是真实的 `AppState`，其中不少动作会顺手持久化。若放任它写，
+    /// 每跑一次自检都会覆盖用户的扫描目录、整理规则、以及「不参与整理」的标记 ——
+    /// 这类污染不会报错，只会让用户某天发现配置莫名变了。
+    nonisolated(unsafe) static var suppressPreferenceWrites = false
 
     private var scanTask: Task<Void, Never>?
     private var isLoaded = false
@@ -157,6 +290,201 @@ final class AppState: ObservableObject {
         return groups.filter { $0.kind == kind }
     }
 
+    // MARK: - 「所有媒体」页的派生数据
+
+    /// 当前筛选条件下要显示的文件。
+    ///
+    /// 排序必须**全序且稳定**：拍摄时间相同的照片很多（连拍），只按时间排的话
+    /// 顺序由底层数组决定，界面每次重算都可能换位置，网格会自己跳动。
+    /// 所以每组比较都以「文件名 → 路径」兜底。
+    var visibleMediaItems: [MediaItem] {
+        var list = items.filter { $0.kind == .image || $0.kind == .video }
+        if let wanted = mediaFilter.kind.mediaKind {
+            list = list.filter { $0.kind == wanted }
+        }
+        let keyword = mediaFilter.keyword.trimmingCharacters(in: .whitespaces).lowercased()
+        if !keyword.isEmpty {
+            list = list.filter {
+                $0.fileName.lowercased().contains(keyword)
+                    || $0.parentPath.lowercased().contains(keyword)
+                    || $0.cameraLabel.lowercased().contains(keyword)
+            }
+        }
+        let sort = mediaFilter.sort
+        list.sort { a, b in
+            switch sort {
+            case .capturedDesc, .capturedAsc:
+                let ad = a.capturedAt, bd = b.capturedAt
+                // 时间未知的一律排在最后，不参与「新旧」的语义
+                if (ad == nil) != (bd == nil) { return bd == nil }
+                if let ad, let bd, ad != bd {
+                    return sort == .capturedDesc ? ad > bd : ad < bd
+                }
+            case .name:
+                break
+            case .sizeDesc:
+                if a.fileSize != b.fileSize { return a.fileSize > b.fileSize }
+            }
+            if a.fileName != b.fileName { return a.fileName < b.fileName }
+            return a.path < b.path
+        }
+        return list
+    }
+
+    /// 勾选中的文件。按 `items` 的顺序返回，也会自动丢掉已经不存在的文件 ——
+    /// 执行过一次计划之后选择集里可能留着指向已消失文件的 id。
+    var cleanupSelectedItems: [MediaItem] {
+        let ids = cleanupSelection
+        return items.filter { $0.kind.isVisualMedia && ids.contains($0.id) }
+    }
+
+    var cleanupSelectedCount: Int { cleanupSelectedItems.count }
+    var cleanupSelectedBytes: Int64 { cleanupSelectedItems.reduce(0) { $0 + $1.fileSize } }
+    var cleanupSelectedBytesLabel: String {
+        ByteCountFormatter.string(fromByteCount: cleanupSelectedBytes, countStyle: .file)
+    }
+    var canGenerateCleanupPlan: Bool { !cleanupSelectedItems.isEmpty }
+
+    /// 每个文件在重复组里的角色，供「所有媒体」页标注角标。
+    /// 一次算好整份字典再交给视图 —— 让每张卡片各自去遍历 `groups` 会变成 O(卡片数 × 分组数)。
+    struct DuplicateRole {
+        var kind: DuplicateKind
+        var isRedundant: Bool
+        var disposition: GroupDisposition
+    }
+
+    var duplicateRoleByItemID: [UUID: DuplicateRole] {
+        var map: [UUID: DuplicateRole] = [:]
+        for group in groups {
+            let redundant = group.redundantMemberIDs
+            for member in group.memberIDs {
+                map[member] = DuplicateRole(kind: group.kind,
+                                            isRedundant: redundant.contains(member),
+                                            disposition: group.disposition)
+            }
+        }
+        return map
+    }
+
+    // MARK: - 来源目录树
+
+    /// 来源目录及其子目录树。
+    ///
+    /// 从**扫描结果反推**而不是去枚举磁盘：扫描只读是硬约束，
+    /// 而且用户关心的正是「扫到了哪些文件在哪个目录」，磁盘上存在但没被扫到的
+    /// 空目录出现在这里反而会让人以为里面有东西。
+    ///
+    /// 中间层级会补齐 —— 某层目录本身没有直接文件（文件都在更深的子目录里）时，
+    /// 少了它树就断成两截，层级缩进也会算错。
+    var sourceFolderGroups: [SourceFolderGroup] {
+        var rootOrder: [String] = []
+        var dirsByRoot: [String: Set<String>] = [:]
+        var directCount: [String: Int] = [:]
+        var directBytes: [String: Int64] = [:]
+
+        for item in items where item.kind.isVisualMedia {
+            if dirsByRoot[item.sourceRoot] == nil { rootOrder.append(item.sourceRoot) }
+            let parent = PathTools.normalized(item.parentPath)
+            dirsByRoot[item.sourceRoot, default: []].insert(parent)
+            directCount[parent, default: 0] += 1
+            directBytes[parent, default: 0] += item.fileSize
+        }
+
+        return rootOrder.sorted().map { rawRoot in
+            let root = PathTools.normalized(rawRoot)
+            var dirs = Set<String>([root])
+            for dir in dirsByRoot[rawRoot] ?? [] where dir != root {
+                var current = dir
+                while current.count > root.count, current.hasPrefix(root) {
+                    dirs.insert(current)
+                    let parent = PathTools.normalized((current as NSString).deletingLastPathComponent)
+                    if parent == current { break }
+                    current = parent
+                }
+            }
+            let sorted = dirs.sorted()
+
+            // 自底向上累计「含子目录」的文件数。字典序下子目录必然排在父目录之后，
+            // 所以倒序遍历时每个节点被累加之前，它的子节点都已经算好了。
+            var totals: [String: Int] = [:]
+            for dir in sorted { totals[dir] = directCount[dir] ?? 0 }
+            for dir in sorted.reversed() where dir != root {
+                let parent = PathTools.normalized((dir as NSString).deletingLastPathComponent)
+                guard totals[parent] != nil else { continue }
+                totals[parent, default: 0] += totals[dir] ?? 0
+            }
+
+            let folders = sorted.map { dir in
+                SourceSubfolder(path: dir,
+                                name: (dir as NSString).lastPathComponent,
+                                depth: Self.depth(of: dir, under: root),
+                                fileCount: directCount[dir] ?? 0,
+                                bytes: directBytes[dir] ?? 0,
+                                totalFileCount: totals[dir] ?? 0,
+                                isExcluded: excludedFromOrganizing.contains(dir),
+                                isInherited: dir != root
+                                    && excludedFromOrganizing.contains(dir) == false
+                                    && hasExcludedAncestor(dir, root: root))
+            }
+            return SourceFolderGroup(root: root,
+                                     name: (root as NSString).lastPathComponent,
+                                     folders: folders,
+                                     totalFileCount: totals[root] ?? 0,
+                                     totalBytes: folders.reduce(Int64(0)) { $0 + $1.bytes })
+        }
+    }
+
+    private static func depth(of path: String, under root: String) -> Int {
+        guard path != root else { return 0 }
+        let relative = path.dropFirst(root.count).drop(while: { $0 == "/" })
+        return relative.split(separator: "/").count
+    }
+
+    /// 自身之外的任一上级（直到来源根）是否被排除
+    private func hasExcludedAncestor(_ path: String, root: String) -> Bool {
+        var current = PathTools.normalized((path as NSString).deletingLastPathComponent)
+        while current.count >= root.count {
+            if excludedFromOrganizing.contains(current) { return true }
+            if current == root { return false }
+            let parent = PathTools.normalized((current as NSString).deletingLastPathComponent)
+            if parent == current { return false }
+            current = parent
+        }
+        return false
+    }
+
+    /// 某个目录是否因自身或上级被排除而不参与整理
+    func isExcludedFromOrganizing(_ path: String) -> Bool {
+        let normalized = PathTools.normalized(path)
+        if excludedFromOrganizing.contains(normalized) { return true }
+        var current = normalized
+        while true {
+            let parent = PathTools.normalized((current as NSString).deletingLastPathComponent)
+            if parent == current { return false }
+            if excludedFromOrganizing.contains(parent) { return true }
+            current = parent
+        }
+    }
+
+    /// 勾选 / 取消某个目录的「不参与整理」。
+    ///
+    /// 取消上级的排除时，下级那些「随上级」的目录会自动恢复参与 ——
+    /// 因为它们从来没有被单独勾选过，状态只在上级那一处存着。
+    func toggleOrganizingExclusion(_ path: String) {
+        let normalized = PathTools.normalized(path)
+        if excludedFromOrganizing.contains(normalized) {
+            excludedFromOrganizing.remove(normalized)
+        } else {
+            // 勾选一个目录时顺手清掉它下面那些已被单独标记的项：
+            // 留着它们不会改变结果（上级已经排除了），但界面上会出现
+            // 「上级没勾、下级勾着」的矛盾观感，取消上级时又会冒出一堆意外生效的排除。
+            let prefix = normalized.hasSuffix("/") ? normalized : normalized + "/"
+            excludedFromOrganizing = excludedFromOrganizing.filter { !$0.hasPrefix(prefix) }
+            excludedFromOrganizing.insert(normalized)
+        }
+        persistPreferences()
+    }
+
     var selectedOperationCount: Int {
         operations.filter { $0.selected && $0.kind.isMutating }.count
     }
@@ -183,6 +511,7 @@ final class AppState: ObservableObject {
         static let settings = "scanSettings"
         static let rule = "organizeRule"
         static let filter = "planFilter"
+        static let excludedFolders = "excludedFromOrganizing"
     }
 
     private func loadPreferences() {
@@ -200,9 +529,18 @@ final class AppState: ObservableObject {
            let value = try? decoder.decode(PlanFilter.self, from: data) {
             filter = value
         }
+        // 「不参与整理」是用户对某个照片库的一次性判断，属于偏好而不是扫描结果，
+        // 所以跟偏好一起持久化：重启、重新扫描之后依然生效。
+        if let paths = UserDefaults.standard.array(forKey: PrefKey.excludedFolders) as? [String] {
+            excludedFromOrganizing = Set(paths.map { PathTools.normalized($0) })
+        }
     }
 
     func persistPreferences() {
+        // 自检会驱动真实的 `AppState`，而不少动作（改设置、勾选排除目录…）都会顺手持久化。
+        // 让它们写进用户的偏好，跑一次自检就等于悄悄改掉了用户自己的配置 ——
+        // 与 `JournalStore.overrideDirectory` 是同一个道理。
+        guard !Self.suppressPreferenceWrites else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(settings) {
@@ -214,6 +552,7 @@ final class AppState: ObservableObject {
         if let data = try? encoder.encode(filter) {
             UserDefaults.standard.set(data, forKey: PrefKey.filter)
         }
+        UserDefaults.standard.set(Array(excludedFromOrganizing), forKey: PrefKey.excludedFolders)
     }
 
     // MARK: - 源目录
@@ -268,6 +607,7 @@ final class AppState: ObservableObject {
         planSummary = PlanSummary()
         planWarnings = []
         folderCounts = [:]
+        cleanupSelection.removeAll()
 
         scanTask = Task { [weak self] in
             await self?.performScan()
@@ -302,6 +642,9 @@ final class AppState: ObservableObject {
         cachedHitCount = outcome.cachedHits
         lastScanElapsed = outcome.elapsed
         scannedOnce = true
+        // 换了一批文件，旧的勾选 id 全部失效 —— 留着只会让「已勾选 N 个」
+        // 与网格里能看到的勾选数对不上。
+        cleanupSelection.removeAll()
 
         await recomputeDuplicates()
 
@@ -460,7 +803,8 @@ final class AppState: ObservableObject {
         let built = PlanBuilder.build(items: items,
                                      groups: groups,
                                      rule: rule,
-                                     filter: filter)
+                                     filter: filter,
+                                     excludedFromOrganizing: excludedFromOrganizing)
         operations = built.operations
         planSummary = built.summary
         planWarnings = built.warnings
@@ -476,6 +820,69 @@ final class AppState: ObservableObject {
             notice = AppNotice(level: .success, title: "计划已生成",
                                message: "共 \(built.operations.count) 行，"
                                    + "其中待执行 \(built.summary.totalSelected) 项" + suffix + "。")
+            page = .plan
+        }
+    }
+
+    // MARK: - 「所有媒体」页：手动勾选清理
+
+    func toggleCleanupSelection(_ itemID: UUID) {
+        if cleanupSelection.contains(itemID) {
+            cleanupSelection.remove(itemID)
+        } else {
+            cleanupSelection.insert(itemID)
+        }
+    }
+
+    func isCleanupSelected(_ itemID: UUID) -> Bool { cleanupSelection.contains(itemID) }
+
+    /// 把一批文件整体设为勾选 / 取消勾选。用于「全选当前结果」「取消当前结果」。
+    func setCleanupSelection(_ selected: Bool, itemIDs: [UUID]) {
+        if selected {
+            cleanupSelection.formUnion(itemIDs)
+        } else {
+            cleanupSelection.subtract(itemIDs)
+        }
+    }
+
+    func clearCleanupSelection() {
+        cleanupSelection.removeAll()
+    }
+
+    /// 为「所有媒体」页勾选的文件生成清理计划。
+    ///
+    /// 范围完全由用户点名：不读 `PlanFilter`，也不含任何归档操作 ——
+    /// 所以「整理规则」页的模板怎么改都不会影响这里的结果，
+    /// 用户看到的勾选就是计划里会出现的行。
+    func generateCleanupPlan() {
+        let selected = cleanupSelectedItems
+        guard !selected.isEmpty else {
+            notice = AppNotice(level: .warning, title: "还没有勾选任何文件",
+                               message: items.isEmpty
+                                   ? "请先在「扫描」页完成一次扫描。"
+                                   : "点击缩略图右上角的圆圈，勾选要清理的文件。")
+            return
+        }
+
+        let built = PlanBuilder.buildTrashOnly(items: items,
+                                               selectedIDs: Set(selected.map { $0.id }),
+                                               groups: groups)
+        operations = built.operations
+        planSummary = built.summary
+        planWarnings = built.warnings
+        folderCounts = built.folderCounts
+
+        if built.operations.isEmpty {
+            notice = AppNotice(level: .info, title: "没有需要处理的内容",
+                               message: "勾选的文件都不在可清理的媒体类型里。")
+        } else {
+            // 手动清理绕开了重复项的推荐逻辑，勾中整组或勾中保留项都是可能的。
+            // 有风险提示时用 warning 而不是 success —— 页头的提示条是最先被看到的地方。
+            let level: AppNotice.Level = built.warnings.count > 1 ? .warning : .success
+            notice = AppNotice(level: level, title: "清理计划已生成",
+                               message: "共 \(built.operations.count) 个文件待移入回收站，"
+                                   + "预计释放 \(built.summary.reclaimableLabel)。"
+                                   + (built.warnings.count > 1 ? "已列出 \(built.warnings.count - 1) 条风险提示。" : ""))
             page = .plan
         }
     }
@@ -522,7 +929,8 @@ final class AppState: ObservableObject {
         notice = AppNotice(level: level, title: "执行完成", message: report.summaryLine)
 
         // 计划已经落地，重新生成一份以反映现状
-        let rebuilt = PlanBuilder.build(items: items, groups: groups, rule: rule, filter: filter)
+        let rebuilt = PlanBuilder.build(items: items, groups: groups, rule: rule, filter: filter,
+                                        excludedFromOrganizing: excludedFromOrganizing)
         operations = rebuilt.operations
         planSummary = rebuilt.summary
         planWarnings = rebuilt.warnings
@@ -559,6 +967,8 @@ final class AppState: ObservableObject {
 
         // 引用了已消失文件的分组要一并剔除
         let liveIDs = Set(updated.map { $0.id })
+        // 勾选集合同样只保留还存在的文件，否则「已勾选 N 个」会包含看不见的行
+        cleanupSelection = cleanupSelection.intersection(liveIDs)
         groups = groups.compactMap { group in
             var copy = group
             copy.memberIDs = copy.memberIDs.filter { liveIDs.contains($0) }
@@ -584,6 +994,7 @@ final class AppState: ObservableObject {
         planSummary = PlanSummary()
         planWarnings = []
         folderCounts = [:]
+        cleanupSelection.removeAll()
         scannedOnce = false
         let level: AppNotice.Level = report.failed == 0 ? .success : .warning
         notice = AppNotice(level: level, title: "撤销完成",

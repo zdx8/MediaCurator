@@ -188,12 +188,22 @@ enum PathTools {
         return s
     }
 
+    /// 标准化路径：解析 "." / ".."、合并重复斜杠、去掉结尾斜杠。
+    ///
+    /// 同一个目录在系统各处拿到的字符串形态并不一致（`NSOpenPanel` 会给带尾斜杠的，
+    /// `NSString.deletingLastPathComponent` 给不带尾斜杠的）。把它当 `Set` 的键、
+    /// 做前缀比较或判断父子关系之前必须先过一遍，否则同一个目录会被当成两个。
+    static func normalized(_ path: String) -> String {
+        guard !path.isEmpty else { return path }
+        return URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
     /// 判断 `child` 是否位于 `parent` 之内（含相等）
     static func isInside(_ child: String, parent: String) -> Bool {
-        let c = URL(fileURLWithPath: child).standardizedFileURL.path
-        let p = URL(fileURLWithPath: parent).standardizedFileURL.path
+        let c = normalized(child)
+        let p = normalized(parent)
         if c == p { return true }
-        return c.hasPrefix(p.hasSuffix("/") ? p : p + "/")
+        return c.hasPrefix(p + "/")
     }
 
     static func uniquePath(_ desired: String) -> String {

@@ -8,6 +8,10 @@ struct PlanBuildResult {
     var folderCounts: [String: Int] = [:]
     var consideredCount: Int = 0
     var filteredOutCount: Int = 0
+    /// 因所在目录被勾选「不参与整理」而没有进入归档的文件数。
+    /// 与 `filteredOutCount` 分开计：那个是「不符合条件」，这个是「用户点名不要动」，
+    /// 界面上要能分别说清楚，否则用户只看到总数对不上却找不到原因。
+    var excludedCount: Int = 0
 
     var hasMutatingWork: Bool {
         operations.contains { $0.selected && $0.kind.isMutating }
@@ -32,9 +36,14 @@ enum PlanBuilder {
     static func build(items: [MediaItem],
                       groups: [DuplicateGroup],
                       rule: OrganizeRule,
-                      filter: PlanFilter) -> PlanBuildResult {
+                      filter: PlanFilter,
+                      excludedFromOrganizing: Set<String> = []) -> PlanBuildResult {
         var result = PlanBuildResult()
         guard filter.doesAnyWork, !items.isEmpty else { return result }
+
+        // 标准化一次，后面每个文件都要比 —— 逐次去调用 `standardizedFileURL`
+        // 在几万个文件上是明显的浪费。
+        let excludedFolders = excludedFromOrganizing.map { PathTools.normalized($0) }
 
         // 冗余副本索引。哪些成员算冗余只有一个来源：`DuplicateGroup.redundantMemberIDs`。
         // 「整组保留」的组它返回空集（这几张只是长得像，用户已确认每张都要留），
@@ -88,6 +97,16 @@ enum PlanBuilder {
             let group = redundant[item.id]
             if filter.onlyRedundantDuplicates && group == nil {
                 result.filteredOutCount += 1; continue
+            }
+
+            // 「不参与整理」只作用于**归档**。这个文件若同时被判为冗余副本、
+            // 且本次开启了清理，它仍旧会进清理列表 —— 清理针对的是「同一批素材里的多余副本」，
+            // 和「这个目录要不要按模板重排」是两件事。
+            let isExcluded = !excludedFolders.isEmpty
+                && isUnder(PathTools.normalized(item.parentPath), anyOf: excludedFolders)
+            if isExcluded {
+                result.excludedCount += 1
+                if group == nil || !filter.cleanRedundantDuplicates { continue }
             }
 
             let components: [String]
@@ -253,8 +272,92 @@ enum PlanBuilder {
         result.operations = operations
         result.summary = PlanSummary.compute(from: operations)
         result.warnings = buildWarnings(items: items, groups: groups, rule: rule,
-                                        filter: filter, result: result)
+                                        filter: filter, result: result,
+                                        excludedFolders: excludedFolders)
         return result
+    }
+
+    // MARK: - 「所有媒体」页：手动点名的纯清理计划
+
+    /// 把用户在「所有媒体」页勾选的文件翻译成一组移入回收站的操作。
+    ///
+    /// 单独一个入口，而不是复用 `build(items:groups:rule:filter:)`：那个函数的语义是
+    /// 「按规则处理」—— 它会读目录模板、算目标路径、按 `onlyRedundantDuplicates`
+    /// 之类的开关过滤，用户点名的文件可能被这些规则**悄悄排除或改变**。
+    /// 这里的语义是「用户点了这几个，就清理这几个」，范围必须逐字对应；
+    /// 也正因如此，它不看 `PlanFilter`、不产生任何归档操作。
+    ///
+    /// 仍然不碰文件系统（只做只读探测），执行交给 `PlanExecutor`。
+    static func buildTrashOnly(items: [MediaItem],
+                               selectedIDs: Set<UUID>,
+                               groups: [DuplicateGroup]) -> PlanBuildResult {
+        var result = PlanBuildResult()
+
+        // 按 `items` 的既有顺序取，保证同一份勾选每次生成的操作行顺序一致，
+        // 界面上不会出现「重新生成一次，行序全变了」。
+        let picked = items.filter { $0.kind.isVisualMedia && selectedIDs.contains($0.id) }
+        result.consideredCount = items.filter { $0.kind.isVisualMedia }.count
+        result.filteredOutCount = result.consideredCount - picked.count
+        guard !picked.isEmpty else { return result }
+
+        result.operations = picked.map { item in
+            PlanOperation(kind: .trash,
+                          itemID: item.id,
+                          sourcePath: item.path,
+                          destinationPath: nil,
+                          reason: "在「所有媒体」页勾选清理",
+                          fileSize: item.fileSize,
+                          kindOfMedia: item.kind,
+                          fileName: item.fileName)
+        }
+        result.summary = PlanSummary.compute(from: result.operations)
+        result.warnings = trashOnlyWarnings(picked: picked, groups: groups)
+        return result
+    }
+
+    /// 手动勾选清理的风险提示。
+    ///
+    /// 这条路径绕开了重复项的推荐逻辑 —— 用户可以直接勾中某个组的原件，
+    /// 而程序完全不会拦。所以宁可多提示几句：清掉原件之后，那一组就只剩副本了，
+    /// 虽然还能从回收站找回，但用户很可能没意识到自己做了这件事。
+    private static func trashOnlyWarnings(picked: [MediaItem],
+                                          groups: [DuplicateGroup]) -> [String] {
+        var warnings: [String] = []
+        let chosen = Set(picked.map { $0.id })
+        let bytes = picked.reduce(Int64(0)) { $0 + $1.fileSize }
+        let sizeLabel = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+
+        warnings.append("勾选的 \(picked.count) 个文件将移入系统回收站，预计释放 \(sizeLabel)。"
+                        + "文件不会直接消失，可在操作日志里撤销找回。")
+
+        // 整组都被点名 —— 这一组将一份不剩。与「都不保留」是同一个后果，
+        // 但那是显式选择，这里很可能是顺手全选出来的，更需要点名。
+        var fullyPickedGroups: [DuplicateGroup] = []
+        var pickedKeepers = 0
+        for group in groups {
+            let overlap = chosen.intersection(group.memberIDs)
+            guard !overlap.isEmpty else { continue }
+            if overlap.count == group.memberIDs.count {
+                fullyPickedGroups.append(group)
+            }
+            pickedKeepers += overlap.filter { member in
+                group.keepWholeGroup || group.effectiveKeepIDs.contains(member)
+            }.count
+        }
+
+        if !fullyPickedGroups.isEmpty {
+            let total = fullyPickedGroups.reduce(0) { $0 + $1.memberCount }
+            let kinds = Set(fullyPickedGroups.map { $0.kind.displayName }).sorted().joined(separator: "、")
+            warnings.append("勾选覆盖了 \(fullyPickedGroups.count) 个重复组的全部成员"
+                            + "（\(kinds)，共 \(total) 个文件）：这些组不会留下任何一份。")
+        }
+
+        if pickedKeepers > 0 {
+            warnings.append("其中 \(pickedKeepers) 个文件正是所在重复组里被判定为「保留」的那几个 ——"
+                            + "重复项页的保留决定**不会**阻止这里的清理，清掉后该组就只剩冗余副本了。")
+        }
+
+        return warnings
     }
 
     // MARK: - 序号分配
@@ -305,6 +408,18 @@ enum PlanBuilder {
 
     // MARK: - 原因描述
 
+    /// `path` 是否位于 `folders` 里任意一个之内（含目录自身）。
+    ///
+    /// 用「精确相等或前缀 + 斜杠」而不是裸 `hasPrefix`：否则 `/照片/2023` 会被判为
+    /// 命中 `/照片/2023-备份`，把一整个不相关的目录排除掉，而界面上完全看不出来。
+    static func isUnder(_ path: String, anyOf folders: [String]) -> Bool {
+        for folder in folders {
+            if path == folder { return true }
+            if path.hasPrefix(folder), path.dropFirst(folder.count).first == "/" { return true }
+        }
+        return false
+    }
+
     private static func buildReason(item: MediaItem, rule: OrganizeRule, extra: String) -> String {
         var parts: [String] = []
 
@@ -334,8 +449,18 @@ enum PlanBuilder {
                                       groups: [DuplicateGroup],
                                       rule: OrganizeRule,
                                       filter: PlanFilter,
-                                      result: PlanBuildResult) -> [String] {
+                                      result: PlanBuildResult,
+                                      excludedFolders: [String]) -> [String] {
         var warnings: [String] = []
+
+        // 排除了目录就必须说清楚「影响什么、不影响什么」——
+        // 用户勾选时的本意多半是「这些别动」，而这里清理冗余副本仍然是生效的，
+        // 不写明白会出现「我明明排除了它，怎么还是被清了」。
+        if !excludedFolders.isEmpty {
+            warnings.append("有 \(excludedFolders.count) 个目录被勾选「不参与整理」："
+                            + "其中的 \(result.excludedCount) 个文件不会按模板移动或重命名，"
+                            + "但**重复副本的清理不受影响**。可在「所有媒体」页的来源目录里调整。")
+        }
 
         let unknown = items.filter { $0.capturedAt == nil || $0.timeSource == .none }.count
         if unknown > 0 {

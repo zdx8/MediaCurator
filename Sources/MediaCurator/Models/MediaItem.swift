@@ -22,6 +22,12 @@ enum MediaKind: String, Codable, CaseIterable, Hashable {
         case .other: return "doc"
         }
     }
+
+    /// 能出缩略图、能参与查重与归档的媒体类型。
+    ///
+    /// 「所有媒体」页和计划生成都按这个口径筛选 —— 写成一处，
+    /// 免得某处漏判 `other` 而让不认识的扩展名混进网格或操作清单。
+    var isVisualMedia: Bool { self == .image || self == .video }
 }
 
 // MARK: - 拍摄时间来源

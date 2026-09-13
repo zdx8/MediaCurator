@@ -41,23 +41,24 @@
       <p class="eyebrow">macOS 原生应用 · 无第三方依赖 · 不上传任何文件</p>
       <h1>把几万张照片视频<br>整理成能找得到的样子</h1>
       <p class="lede">
-        影像管家扫描你的照片库，找出真正重复与长得像的文件，按拍摄时间和设备归入清晰的目录结构，
-        并支持批量重命名。<strong>零依赖、纯本地运行</strong>，所有改动先出计划、由你确认，
+        影像管家扫描你的照片库，把全部文件摊开供你逐个勾选，也替你找出真正重复与长得像的，
+        再按拍摄时间和设备归入清晰的目录结构，并支持批量重命名。
+        <strong>零依赖、纯本地运行</strong>，所有改动先出计划、由你确认，
         删除只到回收站，每一步都能撤销。
       </p>
 
       <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-arm64.zip">
+        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-arm64.zip">
           <span class="btn-title">下载 for Apple Silicon</span>
-          <span class="btn-sub">arm64 · 2.3 MB</span>
+          <span class="btn-sub">arm64 · 2.5 MB</span>
         </a>
-        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-universal.zip">
+        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-universal.zip">
           <span class="btn-title">下载通用版</span>
-          <span class="btn-sub">Intel + Apple Silicon · 3.5 MB</span>
+          <span class="btn-sub">Intel + Apple Silicon · 3.9 MB</span>
         </a>
       </div>
 
-      <p class="version-pill"><strong>v1.0.1</strong> · 整组决定改三态、跳过重复项只做按规则归档、修复并查集后摘要数量漂移</p>
+      <p class="version-pill"><strong>v1.0.2</strong> · 新增「所有媒体」页：逐个勾选清理、按子目录标记「不参与整理」</p>
 
       <ul class="hero-facts">
         <li><strong>macOS 14+</strong> 起</li>
@@ -68,7 +69,7 @@
       </ul>
 
       <figure class="shot shot-hero">
-        <img src="images/overview-light.png" width="1800" height="1138" alt="影像管家主界面：左侧是五步工作流导航，右侧是重复项审阅页，显示分组的重复文件与可释放空间。">
+        <img src="images/overview-light.png" width="1800" height="1138" alt="影像管家主界面：左侧是六步工作流导航，右侧是重复项审阅页，显示分组的重复文件与可释放空间。">
         <figcaption>重复项页：每组的整组决定是三态的 ——
           <strong>按选择 / 整组保留 / 都不保留</strong>，切换时与顶部摘要联动</figcaption>
       </figure>
@@ -99,7 +100,7 @@
   <!-- ============ 工作流 ============ -->
   <section class="section section-alt" id="workflow">
     <div class="wrap">
-      <h2 class="section-title">五步，每一步都看得见在做什么</h2>
+      <h2 class="section-title">六步，每一步都看得见在做什么</h2>
       <p class="section-lede">不是「一键整理」的黑盒：每一阶段的结果都摆在界面上，可以逐项检查、逐项否决。</p>
 
       <ol class="steps">
@@ -118,6 +119,24 @@
         <li>
           <div class="step-text">
             <span class="step-no">2</span>
+            <h3>所有媒体</h3>
+            <p>把扫到的文件<strong>全部摊开</strong>，按类型筛选、按拍摄时间或体积排序，点开就能放大看。
+               想清哪几张就勾哪几张 —— 这一页完全由你点名，程序不参与判断，
+               所以它也是唯一能把某几张「看着不想要」的照片直接挑出来的地方。</p>
+            <p>上方列出<strong>每个来源目录及其子目录</strong>（含文件数），可以逐个勾选
+               <strong>「不参与整理」</strong>：这些目录里的文件不会被按模板移动或重命名。
+               适合结构已经是你想要的样子、或者想留作原样备份的目录。
+               勾选上级目录时，下级会显示为「随上级」并自动生效。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/all-media-selected.png" width="1400" height="925" alt="所有媒体页：上方是来源目录与子目录列表，下方网格里每个缩略图右上角有勾选圈，已勾选的显示红色描边与对勾。" loading="lazy">
+            <figcaption>勾选要清理的文件（泛红描边加对勾）；上方是来源目录，可逐个标记「不参与整理」</figcaption>
+          </figure>
+        </li>
+
+        <li>
+          <div class="step-text">
+            <span class="step-no">3</span>
             <h3>重复项</h3>
             <p>按「精确重复 / 相似图片 / 相似视频」分组，每组给出保留建议和<strong>具体理由</strong>
                （分辨率最高、时间戳最可信、体积最大…）。点缩略图可放大比对；
@@ -149,7 +168,7 @@
 
         <li>
           <div class="step-text">
-            <span class="step-no">3</span>
+            <span class="step-no">4</span>
             <h3>放大比对</h3>
             <p>看细节不用切到别的程序：滚轮缩放、拖拽平移、双击在适应窗口与 200% 之间切换，
                方向键在组内翻页。视频直接内嵌播放器。</p>
@@ -165,7 +184,7 @@
 
         <li>
           <div class="step-text">
-            <span class="step-no">4</span>
+            <span class="step-no">5</span>
             <h3>整理规则</h3>
             <p>九种目录结构模板，从「年/月/月-日/设备」到扁平的年-月-日；命名模板支持 30 个变量。
                改模板时右边实时预览改名结果，确认无误再生成计划。</p>
@@ -177,7 +196,7 @@
 
         <li>
           <div class="step-text">
-            <span class="step-no">5</span>
+            <span class="step-no">6</span>
             <h3>执行计划与撤销</h3>
             <p>生成一份逐条的操作清单，<strong>此时还没有碰过文件系统</strong>。你可以逐项勾选、看清每一条的
                理由，确认后才执行。执行过程写进日志，随时可以整批撤销，文件原路退回。</p>
@@ -195,7 +214,7 @@
 
       <div class="shot-pair">
         <figure class="shot">
-          <img src="images/overview-light.png" width="1800" height="1138" alt="浅色外观下的主界面：左侧五步工作流导航，右侧重复项审阅页。" loading="lazy">
+          <img src="images/overview-light.png" width="1800" height="1138" alt="浅色外观下的主界面：左侧六步工作流导航，右侧重复项审阅页。" loading="lazy">
           <figcaption>浅色</figcaption>
         </figure>
         <figure class="shot">
@@ -290,7 +309,8 @@
           <h3>每一步都能撤销</h3>
           <p>执行过程写入 JSONL 日志。移动与重命名原路退回，回收站里的文件从回收站取回 ——
               包括被顶替的那份。</p>
-          <p><strong>「都不保留」也走同一条路</strong>：整组移入回收站的文件照样可以在操作日志里撤销找回。
+          <p><strong>「都不保留」与「所有媒体」页的手动勾选走的是同一条路</strong>：
+              移入回收站的文件都可以在操作日志里撤销找回。
               而逐张勾选被清空属于误操作，程序会兜底保留一份 ——
               只有显式选「都不保留」才放开这个护栏。</p>
         </div>
@@ -344,24 +364,25 @@
             <h3>Apple Silicon 版 <span class="tag">推荐</span></h3>
             <p>适用于 M1 / M2 / M3 / M4 及更新芯片的 Mac</p>
           </div>
-          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-arm64.zip">MediaCurator-v1.0.1-arm64.zip<small>2.3 MB</small></a>
+          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-arm64.zip">MediaCurator-v1.0.2-arm64.zip<small>2.5 MB</small></a>
         </div>
         <div class="download-row">
           <div>
             <h3>通用版</h3>
             <p>Intel 芯片的 Mac，或不确定自己用哪种芯片时选这个</p>
           </div>
-          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.1/MediaCurator-v1.0.1-universal.zip">MediaCurator-v1.0.1-universal.zip<small>3.5 MB</small></a>
+          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-universal.zip">MediaCurator-v1.0.2-universal.zip<small>3.9 MB</small></a>
         </div>
       </div>
 
       <p class="req">
-        <strong>v1.0.1 更新</strong>整组决定改为三态枚举（<code>按选择 / 保留整组 / 都不保留</code>），
-        修复了并查集之后顶部「整组保留 N 组」摘要的计数漂移；新增跳过重复项、直接进入按规则归档的用法。
+        <strong>v1.0.2 更新</strong>新增「所有媒体」页：把扫到的文件全部摊开，逐个勾选要清理的；
+        并按来源目录的子目录树逐个标记「不参与整理」（只影响归档，不影响清理）。
+        重复项的整组决定保持三态（<code>按选择 / 保留整组 / 都不保留</code>）。
       </p>
 
       <p class="req">
-        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.1-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.1-机型.zip</code>，内容完全一致。
+        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.2-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.2-机型.zip</code>，内容完全一致。
       </p>
 
       <p class="req">

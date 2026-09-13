@@ -39,6 +39,7 @@ struct ContentView: View {
     private var pageContent: some View {
         switch state.page {
         case .scan: ScanView(state: state)
+        case .allMedia: AllMediaView(state: state)
         case .duplicates: DuplicatesView(state: state)
         case .organize: OrganizeView(state: state)
         case .plan: PlanView(state: state)
@@ -150,6 +151,10 @@ struct SidebarView: View {
         switch page {
         case .scan:
             return state.items.isEmpty ? nil : "\(state.items.count)"
+        case .allMedia:
+            // 只在这个页面里显示「已勾选待清理」的数量：它和「有多少文件」是两回事，
+            // 显示总数会让人以为那些文件已经被选中了。
+            return state.cleanupSelectedCount > 0 ? "\(state.cleanupSelectedCount)" : nil
         case .duplicates:
             return state.groups.isEmpty ? nil : "\(state.groups.count)"
         case .plan:

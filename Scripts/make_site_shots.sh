@@ -53,20 +53,23 @@ emit() { # <源文件（不含扩展名）> <目标文件名> <宽> <高> [png|j
   printf '  · %-30s %s %s\n' "$2" "$size" "$(du -h "$OUT/$2" | cut -f1)"
 }
 
-emit "0-总览-浅色"        "overview-light.png"        1800 1138
-emit "0-总览-深色"        "overview-dark.png"         1400  885
-emit "1-扫描"             "scan.png"                  1400  925
-emit "2-重复项"           "duplicates.png"            1400  925
-emit "2-重复项-保留整组"  "duplicates-keep-whole.png"  1400  925
-emit "2-重复项-都不保留"  "duplicates-discard-all.png" 1400  925
-emit "3-整理规则"         "organize.png"              1400  925
-emit "4-执行计划"         "plan.png"                  1400  925
-emit "5-操作日志"         "journal.png"               1400  925
-emit "6-放大预览"         "preview-image.jpg"         1400  925 jpg
-emit "7-视频预览"         "preview-video.png"         1400  925
+emit "overview-light"        "overview-light.png"        1800 1138
+emit "overview-dark"         "overview-dark.png"         1400  885
+emit "scan"                  "scan.png"                  1400  925
+emit "all-media-selected"    "all-media-selected.png"    1400  925
+emit "duplicates"            "duplicates.png"            1400  925
+emit "duplicates-keep-whole" "duplicates-keep-whole.png" 1400  925
+emit "duplicates-discard-all" "duplicates-discard-all.png" 1400 925
+emit "organize"              "organize.png"              1400  925
+emit "plan"                  "plan.png"                  1400  925
+emit "journal"               "journal.png"               1400  925
+emit "preview-image"         "preview-image.jpg"         1400  925 jpg
+emit "preview-video"         "preview-video.png"         1400  925
 
-# 各图的另一种格式若曾存在过，清掉，避免仓库里留着没人引用的文件
+# 各图的历史遗留版本清掉，避免仓库里留着没人引用的文件
 rm -f "$OUT/preview-image.png"
+# 「所有媒体」页只出带勾选的那一张（见 demoshots 里的说明）
+rm -f "$OUT/all-media.png"
 
 rm -rf "$WORK"
 

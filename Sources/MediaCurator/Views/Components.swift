@@ -221,6 +221,9 @@ struct ThumbnailView: View {
     var size: CGFloat = 96
     var highlighted: Bool = false
     var dimmed: Bool = false
+    /// 指定描边颜色。`highlighted` 只表达「保留」那一种语义（绿色），
+    /// 而「所有媒体」页的勾选表示「要清理」，需要另一种颜色区分。
+    var borderTint: Color? = nil
 
     @State private var image: NSImage?
     @State private var failed = false
@@ -232,12 +235,14 @@ struct ThumbnailView: View {
     @State private var loadedURL: URL?
 
     init(url: URL, kind: MediaKind, size: CGFloat = 96,
-         highlighted: Bool = false, dimmed: Bool = false) {
+         highlighted: Bool = false, dimmed: Bool = false,
+         borderTint: Color? = nil) {
         self.url = url
         self.kind = kind
         self.size = size
         self.highlighted = highlighted
         self.dimmed = dimmed
+        self.borderTint = borderTint
         // 缓存命中就直接作为初始值，并且标记为「已载入」，让 `.task` 直接跳过。
         let cached = ThumbnailProvider.shared.cachedImage(for: url, maxPixel: max(64, size * 2))
         if let cached {
@@ -281,8 +286,8 @@ struct ThumbnailView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(highlighted ? Palette.positive : Color(nsColor: .separatorColor),
-                          lineWidth: highlighted ? 2.5 : 1))
+            .strokeBorder(borderTint ?? (highlighted ? Palette.positive : Color(nsColor: .separatorColor)),
+                          lineWidth: (borderTint != nil || highlighted) ? 2.5 : 1))
         .task(id: url) {
             guard loadedURL != url else { return }
             image = nil

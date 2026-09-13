@@ -29,10 +29,21 @@ enum DemoFixtureBuilder {
 
         var ok = true
 
+        // 素材刻意分门别类放进子目录，而不是全部平铺在根下：
+        // 官网要展示「来源目录与子目录」这个能力，平铺的话那一栏只有孤零零一行。
+        // 「导入/手机相册」特意留出两层，用来看中间层会不会被补齐 —— 只放最深那一层的话，
+        // 树会断成两截、缩进也会算错，而画面上不细看并不明显。
+        let spring = folder("2024-春游", under: root, fm: fm)
+        let autumn = folder("2024-秋", under: root, fm: fm)
+        let plateau = folder("2023-高原", under: root, fm: fm)
+        let imported = folder("导入/手机相册", under: root, fm: fm)
+        let shots = folder("截图", under: root, fm: fm)
+        let clips = folder("视频", under: root, fm: fm)
+
         // ---------- 第一组：日落（相似图片 + 精确重复混在一组） ----------
         // 现实里最常见的形态：一张原图、一份微信保存的字节副本、一份导出时被压缩过的版本。
         if let sunset = landscape(width: 1200, height: 800, seed: 20240812, paletteIndex: 0) {
-            let original = root.appendingPathComponent("IMG_4821.jpg")
+            let original = spring.appendingPathComponent("IMG_4821.jpg")
             ok = write(sunset, to: original,
                                          exifDate: "2024:08:12 18:42:11",
                                          make: "Apple", model: "iPhone 15 Pro") && ok
@@ -40,12 +51,12 @@ enum DemoFixtureBuilder {
                                   ofItemAtPath: original.path)
 
             // 字节完全相同的副本 —— 精确重复
-            let copy = root.appendingPathComponent("IMG_4821-1.jpg")
+            let copy = spring.appendingPathComponent("IMG_4821-1.jpg")
             ok = FixtureBuilder.copy(original, to: copy) && ok
 
             // 缩小重编码 —— 相似但非精确重复
             if let small = FixtureBuilder.scaled(sunset, width: 600, height: 400) {
-                let edited = root.appendingPathComponent("IMG_4821_编辑版.jpg")
+                let edited = spring.appendingPathComponent("IMG_4821_编辑版.jpg")
                 ok = write(small, to: edited,
                                              exifDate: "2024:08:12 18:42:11",
                                              make: "Apple", model: "iPhone 15 Pro") && ok
@@ -54,35 +65,35 @@ enum DemoFixtureBuilder {
 
         // ---------- 第二组：高原湖泊（跨设备，制造「时间线对不上」的场景） ----------
         if let lake = landscape(width: 1000, height: 668, seed: 20231005, paletteIndex: 1) {
-            let original = root.appendingPathComponent("DSC_0217.jpg")
+            let original = plateau.appendingPathComponent("DSC_0217.jpg")
             ok = write(lake, to: original,
                                          exifDate: "2023:10:05 07:12:44",
                                          make: "NIKON CORPORATION", model: "NIKON Z6_2") && ok
-            let backup = root.appendingPathComponent("DSC_0217_备份.jpg")
+            let backup = plateau.appendingPathComponent("DSC_0217_备份.jpg")
             ok = FixtureBuilder.copy(original, to: backup) && ok
         }
 
         // ---------- 单张：不参与查重，但让库看起来是真的 ----------
         if let forest = landscape(width: 1200, height: 800, seed: 990017, paletteIndex: 2) {
-            let url = root.appendingPathComponent("IMG_4903.jpg")
+            let url = autumn.appendingPathComponent("IMG_4903.jpg")
             ok = write(forest, to: url,
                                          exifDate: "2024:09:02 09:15:30",
                                          make: "Apple", model: "iPhone 15 Pro") && ok
         }
         if let leaves = canopy(width: 1400, height: 933, seed: 771245) {
-            let url = root.appendingPathComponent("IMG_4904.jpg")
+            let url = autumn.appendingPathComponent("IMG_4904.jpg")
             ok = write(leaves, to: url,
                                          exifDate: "2024:09:02 17:48:02",
                                          make: "Apple", model: "iPhone 15 Pro") && ok
         }
         // 没有 EXIF、只能从文件名解析时间的那些
         if let night = landscape(width: 1200, height: 800, seed: 404040, paletteIndex: 4) {
-            let url = root.appendingPathComponent("IMG_20211224_231155.jpg")
+            let url = imported.appendingPathComponent("IMG_20211224_231155.jpg")
             ok = write(night, to: url, exifDate: nil, make: nil, model: nil) && ok
         }
         // 截图：平坦画面的典型来源，单独存在，用来体现「这类图很占地方」
         if let shot = screenshotLike(width: 1400, height: 875) {
-            let url = root.appendingPathComponent("Screenshot 2024-08-12 at 22.10.04.png")
+            let url = shots.appendingPathComponent("Screenshot 2024-08-12 at 22.10.04.png")
             ok = writePNG(shot, to: url) && ok
         }
 
@@ -96,8 +107,8 @@ enum DemoFixtureBuilder {
             if let still = landscape(width: 1280, height: 720, seed: 20240812, paletteIndex: 0, grain: 0) {
                 let stillURL = scratch.appendingPathComponent("still.png")
                 if writePNG(still, to: stillURL) {
-                    let clip = root.appendingPathComponent("VID_0031.mp4")
-                    let transcoded = root.appendingPathComponent("VID_0031_转码.mp4")
+                    let clip = clips.appendingPathComponent("VID_0031.mp4")
+                    let transcoded = clips.appendingPathComponent("VID_0031_转码.mp4")
                     let made = FixtureBuilder.makeVideo(still: stillURL, output: clip, quality: 20)
                     let made2 = FixtureBuilder.makeVideo(still: stillURL, output: transcoded, quality: 32)
                     if made { ok = ok && made2 }
@@ -106,6 +117,13 @@ enum DemoFixtureBuilder {
         }
 
         return ok
+    }
+
+    /// 建出（必要时递归建出）一个子目录并返回它
+    private static func folder(_ relative: String, under root: URL, fm: FileManager) -> URL {
+        let url = root.appendingPathComponent(relative, isDirectory: true)
+        try? fm.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 
     private static func date(_ text: String) -> Date {

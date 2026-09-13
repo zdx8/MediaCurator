@@ -9,13 +9,23 @@ import AVKit
 /// 在解码阶段就完成缩放，比「先解全图再缩」既省内存也快。
 /// 这也是它不走缩略图缓存的原因 —— 一张大图会把瓦片缓存里的缩略图全挤掉。
 struct MediaPreviewOverlay: View {
+    /// 顶部那个按钮的语义。两个页面共用这个浮层，但勾选的含义**正好相反**：
+    /// 重复项页勾的是「留下」，所有媒体页勾的是「清掉」。
+    /// 沿用同一套文案的话，用户会以为自己标记的是保留。
+    enum Marking {
+        case keep
+        case cleanup
+    }
+
     let items: [MediaItem]
     @Binding var index: Int
-    /// 组内被标记保留的成员（可多选）
+    /// 组内被标记保留的成员（可多选）。`marking == .cleanup` 时它是「已勾选清理」的集合。
     let keepIDs: Set<UUID>
     /// 本组的整组决定。非「按勾选」时逐张勾选无效，工具条要换成状态说明 ——
     /// 之前这里直接把按钮藏掉，用户只看得出「按钮没了」，看不出为什么。
+    /// `marking == .cleanup` 时无意义（所有媒体页没有整组决定）。
     var disposition: GroupDisposition = .bySelection
+    var marking: Marking = .keep
     let onToggleKeep: (UUID) -> Void
     let onReveal: (String) -> Void
     let onOpen: (String) -> Void
@@ -130,24 +140,10 @@ struct MediaPreviewOverlay: View {
     @ViewBuilder
     private var quickActions: some View {
         if let item {
-            if disposition == .bySelection {
-                // 支持多选，所以这里是「切换」而不是「设为唯一保留」
-                Button {
-                    onToggleKeep(item.id)
-                } label: {
-                    Label(isCurrentKept ? "取消保留" : "设为保留",
-                          systemImage: isCurrentKept ? "checkmark.circle.fill" : "checkmark.circle")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(isCurrentKept ? Palette.neutral : Palette.positive)
-                .controlSize(.small)
-                .disabled(isCurrentKept && isLastKeep)
-                .help(isCurrentKept
-                      ? (isLastKeep
-                         ? "本组至少需要保留一份，先勾选其它成员再取消这一份"
-                         : "取消保留，这张将进入待清理列表")
-                      : "标记为保留（可多选）")
+            if marking == .cleanup {
+                cleanupToggle(item)
+            } else if disposition == .bySelection {
+                keepToggle(item)
             } else {
                 // 整组决定生效：说明为什么这里没有勾选按钮，
                 // 以及当前这张在这一决定下会有什么下场。
@@ -180,6 +176,45 @@ struct MediaPreviewOverlay: View {
             .tint(.white)
             .controlSize(.small)
         }
+    }
+
+    /// 重复项页：勾选 = 留下。支持多选，所以是「切换」而不是「设为唯一保留」。
+    private func keepToggle(_ item: MediaItem) -> some View {
+        Button {
+            onToggleKeep(item.id)
+        } label: {
+            Label(isCurrentKept ? "取消保留" : "设为保留",
+                  systemImage: isCurrentKept ? "checkmark.circle.fill" : "checkmark.circle")
+                .font(.system(size: 11.5, weight: .medium))
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(isCurrentKept ? Palette.neutral : Palette.positive)
+        .controlSize(.small)
+        .disabled(isCurrentKept && isLastKeep)
+        .help(isCurrentKept
+              ? (isLastKeep
+                 ? "本组至少需要保留一份，先勾选其它成员再取消这一份"
+                 : "取消保留，这张将进入待清理列表")
+              : "标记为保留（可多选）")
+    }
+
+    /// 「所有媒体」页：勾选 = 清掉。这里没有「至少留一份」的兜底 ——
+    /// 用户是在逐张点名，程序不该替他决定留下哪一张；
+    /// 风险由计划页的提示与「只进回收站、可撤销」来兜。
+    private func cleanupToggle(_ item: MediaItem) -> some View {
+        Button {
+            onToggleKeep(item.id)
+        } label: {
+            Label(isCurrentKept ? "取消清理" : "加入清理",
+                  systemImage: isCurrentKept ? "trash.slash.fill" : "trash")
+                .font(.system(size: 11.5, weight: .medium))
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(isCurrentKept ? Palette.neutral : Palette.danger)
+        .controlSize(.small)
+        .help(isCurrentKept
+              ? "取消勾选，这个文件会被留下"
+              : "加入清理：生成计划时会移入系统回收站，可在操作日志里撤销找回")
     }
 
     private func circleButton(_ symbol: String,

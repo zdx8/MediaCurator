@@ -45,6 +45,9 @@ enum UIRenderCheck {
         /// 一旦边缘出现墨迹，就说明有控件被挤到了画布外面。
         var leadingEdgeInk: Double = 0
         var trailingEdgeInk: Double = 0
+        /// 画面里出现过的色相桶数（12 等分）。用来判定「照片有没有真的画上去」——
+        /// 空占位符也有墨迹，光看墨迹比例区分不出「画了内容」和「画了照片」。
+        var hueBucketCount: Int = 0
     }
 
     /// 把主色解析成具体分量。显式指定 sRGB —— SwiftUI 的 `Color(red:green:blue:)`
@@ -93,6 +96,9 @@ enum UIRenderCheck {
         // 渲染结果随用户数据变化，自检就不再可重复，也会把测试数据混进真实数据里。
         JournalStore.overrideDirectory = fixtureRoot.appendingPathComponent("journals",
                                                                            isDirectory: true)
+        // 与日志目录同理：自检驱动的动作会顺手持久化偏好，不能让它写进用户的真实配置
+        AppState.suppressPreferenceWrites = true
+        defer { AppState.suppressPreferenceWrites = false }
         // 渲染必须落在真正的主线程上，AppKit 对此有硬性检查。
         // 这条断言同时守住了 HeadlessRunner 的启动方式（不能用 dispatchMain()）。
         checker.check(probeMainThread(), "离屏渲染在主线程上执行")
@@ -157,7 +163,186 @@ enum UIRenderCheck {
         // 各页内容必须不同 —— 否则说明导航没有真正切换视图
         let digests = Set(results.map { $0.digest })
         checker.check(digests.count == results.count,
-                      "五个页面渲染结果互不相同（\(digests.count)/\(results.count)）")
+                      "\(AppPage.allCases.count) 个页面渲染结果互不相同（\(digests.count)/\(results.count)）")
+
+        // 缩略图网格页要专门验一条：**图是不是真的画上去了**。
+        // 「有墨迹」这条判据对空占位符同样成立 —— 一片灰色转圈框也有墨迹，
+        // 页面指纹也各不相同，人不去看图根本发现不了整片缩略图没出来。
+        // 用色相分布做判据：照片是彩色的，纯控件页（扫描页基本是灰白）则不然。
+        if let grid = results.first(where: { $0.name == AppPage.allMedia.title }),
+           let form = results.first(where: { $0.name == AppPage.scan.title }) {
+            print("  · 色相桶数：所有媒体 \(grid.hueBucketCount)/12 ｜ 扫描 \(form.hueBucketCount)/12")
+            checker.check(grid.hueBucketCount > form.hueBucketCount,
+                          "「所有媒体」页的色相比纯控件页更丰富（缩略图确已解码并画出）")
+        } else {
+            checker.check(false, "没有拿到用于对比色相的页面渲染结果")
+        }
+
+        // ---------- 「所有媒体」页：筛选、排序与勾选 ----------
+        // 这一页把「看什么」和「清什么」拆成了两件事，断言也分两组：
+        // 筛选只影响显示、勾选只影响计划范围，两者不能互相串味 ——
+        // 串了就会出现「为了找一张照片改了筛选，结果生成计划时范围也变了」。
+        print("\n▸ 「所有媒体」页的筛选与勾选")
+        let mediaTotal = state.items.filter { $0.kind.isVisualMedia }.count
+        checker.equal(state.visibleMediaItems.count, mediaTotal,
+                      "默认筛选下显示全部 \(mediaTotal) 个媒体文件")
+
+        state.mediaFilter.kind = .video
+        checker.check(state.visibleMediaItems.allSatisfy { $0.kind == .video },
+                      "切到「视频」后结果里只剩视频")
+        checker.equal(state.visibleMediaItems.count, state.videoCount,
+                      "视频筛选的条数与统计一致")
+        state.mediaFilter.kind = .image
+        checker.check(state.visibleMediaItems.allSatisfy { $0.kind == .image },
+                      "切到「图片」后结果里只剩图片")
+
+        state.mediaFilter = MediaFilter()
+        if let sample = state.visibleMediaItems.first {
+            state.mediaFilter.keyword = sample.fileName
+            checker.equal(state.visibleMediaItems.count, 1,
+                          "用完整文件名搜索只命中一条")
+            checker.check(state.visibleMediaItems.first?.id == sample.id,
+                          "命中的正是那个文件")
+        }
+        state.mediaFilter = MediaFilter()
+
+        // 排序必须**稳定**：连拍的拍摄时间完全相同，只按时间排的话顺序由底层数组决定，
+        // 界面每次重算都会换位置 —— 网格自己跳动。两次取样必须逐项相同。
+        checker.equal(state.visibleMediaItems.map { $0.id },
+                      state.visibleMediaItems.map { $0.id },
+                      "排序稳定（连续两次取样逐项相同）")
+
+        // 勾选只影响计划范围：不改文件、也不改变任何重复组的决定。
+        // 用字符串指纹而不是元组数组比较 —— Swift 的元组不自动遵循 `Equatable` 协议，
+        // 而断言辅助函数要求 `T: Equatable`。
+        let groupsBefore = state.groups.map {
+            "\($0.id)/\($0.disposition.rawValue)/\($0.keepIDs.count)"
+        }
+        let pickTwo = Array(state.visibleMediaItems.prefix(2))
+        state.setCleanupSelection(true, itemIDs: pickTwo.map { $0.id })
+        checker.equal(state.cleanupSelectedCount, 2, "勾选两个后计数为 2")
+        checker.equal(state.cleanupSelectedBytes,
+                      pickTwo.reduce(Int64(0)) { $0 + $1.fileSize },
+                      "勾选体积等于这两个文件之和")
+        checker.equal(state.groups.map {
+            "\($0.id)/\($0.disposition.rawValue)/\($0.keepIDs.count)"
+        }, groupsBefore,
+                      "「所有媒体」页的勾选不改变任何重复组的决定")
+
+        state.generateCleanupPlan()
+        checker.equal(state.operations.count, 2, "生成的计划行数等于勾选数")
+        checker.check(state.operations.allSatisfy { $0.kind == .trash },
+                      "手动清理计划里只有「移入回收站」操作")
+        checker.equal(Set(state.operations.map { $0.sourcePath }),
+                      Set(pickTwo.map { $0.path }),
+                      "计划覆盖的路径集合正是勾选的那些")
+
+        state.toggleCleanupSelection(pickTwo[0].id)
+        checker.equal(state.cleanupSelectedCount, 1, "再点一次即取消勾选")
+        state.clearCleanupSelection()
+        checker.equal(state.cleanupSelectedCount, 0, "清空勾选后计数归零")
+        checker.check(state.cleanupSelectedItems.isEmpty, "待清理集合随之为空")
+
+        // ---------- 来源目录树与「不参与整理」 ----------
+        print("\n▸ 来源目录树与「不参与整理」")
+
+        // 路径边界是这条功能最容易出错的地方：裸 `hasPrefix` 会把 /照片备份
+        // 当成 /照片 的子目录，一整个不相关的目录就被静默排除，而界面上完全看不出来。
+        state.excludedFromOrganizing = ["/tmp/MediaCuratorTreeProbe/照片"]
+        checker.check(state.isExcludedFromOrganizing("/tmp/MediaCuratorTreeProbe/照片/2023"),
+                      "子目录继承上级的排除")
+        checker.check(state.isExcludedFromOrganizing("/tmp/MediaCuratorTreeProbe/照片"),
+                      "目录自身的排除命中自己")
+        checker.check(!state.isExcludedFromOrganizing("/tmp/MediaCuratorTreeProbe/照片备份"),
+                      "前缀相似但不同级的目录不受影响（照片 vs 照片备份）")
+        checker.check(!state.isExcludedFromOrganizing("/tmp/MediaCuratorTreeProbe"),
+                      "上级目录不受下级排除影响")
+        checker.check(PlanBuilder.isUnder("/a/b/c", anyOf: ["/a/b"]), "isUnder 认定子路径")
+        checker.check(!PlanBuilder.isUnder("/a/bc", anyOf: ["/a/b"]),
+                      "isUnder 不把 /a/bc 当成 /a/b 的子路径")
+        state.excludedFromOrganizing = []
+
+        // 目录树结构。自检素材是平铺的，这里临时造一份带层级的 items 来验证 ——
+        // 只改内存里的 parentPath，文件路径本身保持真实，后续计划生成仍跑得通。
+        let probeRoot = "/tmp/MediaCuratorTreeProbe/照片库"
+        let probeDirs = [probeRoot + "/2023/2023-05", probeRoot + "/2023/2023-05",
+                         probeRoot + "/备份", probeRoot]
+        var probeItems = Array(state.items.prefix(4))
+        for index in probeItems.indices {
+            probeItems[index].sourceRoot = probeRoot
+            probeItems[index].parentPath = probeDirs[index]
+        }
+        let savedItemsForTree = state.items
+        state.items = probeItems
+        let tree = state.sourceFolderGroups
+        checker.equal(tree.count, 1, "一名来源目录产出一棵树")
+        if let node = tree.first {
+            checker.equal(node.folders.count, 4,
+                          "目录数含补齐的中间层（根 / 2023 / 2023-05 / 备份）")
+            let byName = Dictionary(uniqueKeysWithValues: node.folders.map { ($0.name, $0) })
+            checker.equal(byName["2023"]?.depth, 1, "中间层 2023 的层级为 1")
+            checker.equal(byName["2023-05"]?.depth, 2, "深层目录 2023-05 的层级为 2")
+            checker.equal(byName["2023"]?.fileCount, 0, "中间层本身没有直接文件")
+            checker.equal(byName["2023"]?.totalFileCount, 2, "中间层的总数把子目录算进来")
+            checker.equal(byName["备份"]?.totalFileCount, 1, "叶子目录的总数等于它的直接文件数")
+            checker.equal(node.totalFileCount, 4, "来源根的总数等于全部探针文件数")
+            checker.equal(node.folders.reduce(0) { $0 + $1.fileCount }, 4,
+                          "各目录直接文件数之和等于文件总数（不重不漏）")
+
+            // 层级必须连续：中间层没补齐的话缩进会算错，父目录也找不到
+            let paths = Set(node.folders.map { $0.path })
+            let broken = node.folders.filter { folder in
+                guard folder.depth > 0 else { return false }
+                return !paths.contains((folder.path as NSString).deletingLastPathComponent)
+            }
+            checker.check(broken.isEmpty,
+                          broken.isEmpty ? "每个目录的上级都在树里（层级连续）"
+                                         : "有 \(broken.count) 个目录找不到上级")
+
+            // 继承：排除 2023 之后，2023-05 要显示成「随上级」而不是「自己勾的」——
+            // 两者在界面上一个能点、一个点不动，分不清用户会反复点那个开关
+            state.excludedFromOrganizing = [probeRoot + "/2023"]
+            let inherited = state.sourceFolderGroups.first?
+                .folders.first { $0.name == "2023-05" }
+            checker.check(inherited?.isInherited == true, "子目录标记为「随上级」")
+            checker.check(inherited?.isExcluded == false, "子目录本身没有被单独勾选")
+
+            // 勾选上级要清掉下级的单独勾选，否则会出现「上级没勾、下级还勾着」的矛盾状态
+            state.excludedFromOrganizing = [probeRoot + "/2023/2023-05"]
+            state.toggleOrganizingExclusion(probeRoot + "/2023")
+            checker.equal(state.excludedFromOrganizing, [probeRoot + "/2023"],
+                          "勾选上级时清理掉下级的单独勾选")
+            state.toggleOrganizingExclusion(probeRoot + "/2023")
+            checker.check(state.excludedFromOrganizing.isEmpty, "再点一次即取消排除")
+        }
+        state.excludedFromOrganizing = []
+        state.items = savedItemsForTree
+
+        // 排除只作用于**归档**。这条边界要钉死在断言里：以后有人「顺手」把排除接到
+        // 清理路径上，用户就会在没被告知的情况下少清一批文件（或者反过来多清）。
+        let savedFilterForExclusion = state.filter
+        let savedGroupsForExclusion = state.groups
+        state.filter.archiveFiles = true
+        state.filter.onlyRedundantDuplicates = false
+        state.filter.cleanRedundantDuplicates = true
+        let baseline = PlanBuilder.build(items: state.items, groups: state.groups,
+                                         rule: state.rule, filter: state.filter)
+        let sourceRootForExclusion = state.items.first?.sourceRoot ?? ""
+        let excludedPlan = PlanBuilder.build(items: state.items, groups: state.groups,
+                                             rule: state.rule, filter: state.filter,
+                                             excludedFromOrganizing: [sourceRootForExclusion])
+        checker.equal(excludedPlan.summary.moveCount + excludedPlan.summary.renameCount, 0,
+                      "整棵来源目录被排除后不产生任何归档操作")
+        checker.equal(excludedPlan.summary.trashCount, baseline.summary.trashCount,
+                      "排除目录不影响清理操作的数量（只作用于归档）")
+        checker.check(excludedPlan.excludedCount > 0,
+                      "记录了 \(excludedPlan.excludedCount) 个被排除的文件")
+        checker.check(excludedPlan.warnings.contains { $0.contains("不参与整理") },
+                      "计划提示了「不参与整理」的影响范围与边界")
+        checker.check(excludedPlan.warnings.contains { $0.contains("清理不受影响") },
+                      "提示里写明了清理仍会生效")
+        state.filter = savedFilterForExclusion
+        state.groups = savedGroupsForExclusion
 
         // ---------- 数据变化必须反映到画面上 ----------
         print("\n▸ 数据驱动的渲染差异")
@@ -489,6 +674,8 @@ enum UIRenderCheck {
 
         JournalStore.overrideDirectory = fixtureRoot.appendingPathComponent("journals",
                                                                            isDirectory: true)
+        AppState.suppressPreferenceWrites = true
+        defer { AppState.suppressPreferenceWrites = false }
 
         let state = AppState()
         state.settings.sourceFolders = [fixtureRoot.path]
@@ -513,12 +700,21 @@ enum UIRenderCheck {
         // 解码跑在 `ThumbnailProvider` 这个 actor 上，是**串行**的；视图里的 `.task`
         // 只能一张张排队。渲染的等待窗口内排不完，于是先画出来的页面里靠后的缩略图
         // 还是空的（视频那两张反而先出来）。先解一遍，渲染时就全是缓存命中。
-        // 224 = `DuplicateGroupCard` 里 size 112 的缩略图实际请求的像素数。
+        //
+        // 缓存键是「路径 + 像素数」，所以**每个页面用到的尺寸都要预热** ——
+        // 少预热一档，那个页面整片都是空占位符，而截图本身照样能导出，看不出错在哪。
+        //   224 = `DuplicateGroupCard` 里 size 112 的缩略图
+        //   280 = `AllMediaView` 网格在 1400 宽画布下的边长（约 140）的 2 倍
+        let thumbPixelSizes: [CGFloat] = [224, 280]
         var warmed = 0
-        for item in state.items {
-            if await ThumbnailProvider.shared.thumbnail(for: item.url, maxPixel: 224) != nil { warmed += 1 }
+        for pixel in thumbPixelSizes {
+            for item in state.items {
+                if await ThumbnailProvider.shared.thumbnail(for: item.url, maxPixel: pixel) != nil {
+                    warmed += 1
+                }
+            }
         }
-        print("缩略图预热：\(warmed)/\(state.items.count) 张")
+        print("缩略图预热：\(warmed) 张（\(thumbPixelSizes.count) 档尺寸 × \(state.items.count) 个文件）")
 
         // 「整理规则」与「执行计划」两页要有内容可画
         state.rule.destinationRoot = fixtureRoot.deletingLastPathComponent()
@@ -538,10 +734,11 @@ enum UIRenderCheck {
 
         var failures: [String] = []
 
+        @discardableResult
         func save(_ file: String,
                   size: CGSize,
                   scheme: ColorScheme? = .light,
-                  content: () -> AnyView) async {
+                  content: () -> AnyView) async -> RenderResult? {
             let result = await render(name: file,
                                       size: size,
                                       colorScheme: scheme,
@@ -549,42 +746,67 @@ enum UIRenderCheck {
                                       settle: 0.6,
                                       content: content)
             if let result {
-                print(String(format: "  ✓ %@：%d×%d", file, result.width, result.height))
+                // 带上色相桶数：出图时一眼能看出「这张图里到底有没有照片」——
+                // 缩略图没解码出来的话，这个数会掉到 1–2，而文件大小、导出成功与否都正常。
+                print(String(format: "  ✓ %@：%d×%d  色相 %d/12", file, result.width, result.height,
+                             result.hueBucketCount))
             } else {
                 failures.append(file)
                 print("  ✗ \(file)")
             }
+            return result
         }
 
         // 整机总览：侧栏 + 重复项页，官网首屏用
         let overview = CGSize(width: 1360, height: 860)
-        await save("0-总览-浅色", size: overview, scheme: .light) {
+        await save("overview-light", size: overview, scheme: .light) {
             AnyView(HStack(spacing: 0) {
                 SidebarView(state: state)
                 DuplicatesView(state: state)
             })
         }
-        await save("0-总览-深色", size: overview, scheme: .dark) {
+        await save("overview-dark", size: overview, scheme: .dark) {
             AnyView(HStack(spacing: 0) {
                 SidebarView(state: state)
                 DuplicatesView(state: state)
             })
         }
 
-        // 各功能页
+        // 各功能页。文件名用 `page.shotName`（不含序号）—— 序号会随导航插入新页面
+        // 整体后移，截图名跟着漂移就会让 `make_site_shots.sh` 里那张对照表失配。
         let canvas = CGSize(width: 1400, height: 925)
         for page in AppPage.allCases {
+            // 「所有媒体」页出一张**带勾选**的（见下），这里跳过默认态：
+            // 两张图内容几乎一样，都留着只会让仓库和官网各多背半兆。
+            if page == .allMedia { continue }
             state.page = page
-            await save("\(page.step)-\(page.title)", size: canvas) {
+            await save(page.shotName, size: canvas) {
                 AnyView(pageView(for: page, state: state))
             }
         }
 
+        // 「所有媒体」页的勾选态：官网需要能看出「勾上要清理的文件」是什么样。
+        // 只勾前面几个，保留大片未勾选的格子 —— 全勾会让人误以为这页就是「一键全清」。
+        state.page = .allMedia
+        let pickedForShot = state.visibleMediaItems.prefix(4).map { $0.id }
+        state.setCleanupSelection(true, itemIDs: Array(pickedForShot))
+        let allMediaShot = await save("all-media-selected", size: canvas) {
+            AnyView(AllMediaView(state: state))
+        }
+        // 官网截图的验收标准只有一条：**画面里得真有照片**。
+        // 缩略图没解码出来时截图照样导出成功、文件大小也正常，但整片网格是灰色占位符 ——
+        // 这是后果最直接、又最难自己发现的一种失败（人得逐张点开看才会注意到）。
+        // 用色相桶数兜住：相机照片的色相通常在 8 桶以上，纯灰占位符只有 1–2 桶。
+        if let shot = allMediaShot, shot.hueBucketCount < 6 {
+            failures.append("all-media-selected 只画出 \(shot.hueBucketCount)/12 个色相桶，疑似缩略图未解码")
+        }
+        state.clearCleanupSelection()
+
         // 重复项的两种整组决定：各出一张，官网要能看出区别
         state.page = .duplicates
         let dispositions: [(String, GroupDisposition)] = [
-            ("2-重复项-保留整组", .keepAll),
-            ("2-重复项-都不保留", .discardAll)
+            ("duplicates-keep-whole", .keepAll),
+            ("duplicates-discard-all", .discardAll)
         ]
         for (file, disposition) in dispositions {
             state.groups[0].disposition = disposition
@@ -604,7 +826,7 @@ enum UIRenderCheck {
                 }
                 return ThumbnailProvider.nsImage(from: cg)
             }
-            await save("6-放大预览", size: canvas) {
+            await save("preview-image", size: canvas) {
                 AnyView(MediaPreviewOverlay(items: members,
                                             index: .constant(0),
                                             keepIDs: group.keepIDs,
@@ -620,7 +842,7 @@ enum UIRenderCheck {
         // 放大预览（视频）
         if let videoGroup = state.groups.first(where: { $0.kind == .similarVideo }) {
             let members = videoGroup.memberIDs.compactMap { state.itemsByID[$0] }
-            await save("7-视频预览", size: canvas) {
+            await save("preview-video", size: canvas) {
                 AnyView(MediaPreviewOverlay(items: members,
                                             index: .constant(0),
                                             keepIDs: videoGroup.keepIDs,
@@ -643,6 +865,7 @@ enum UIRenderCheck {
     private static func pageView(for page: AppPage, state: AppState) -> some View {
         switch page {
         case .scan: ScanView(state: state)
+        case .allMedia: AllMediaView(state: state)
         case .duplicates: DuplicatesView(state: state)
         case .organize: OrganizeView(state: state)
         case .plan: PlanView(state: state)
@@ -832,6 +1055,10 @@ enum UIRenderCheck {
         var samples = 0
         var luminances: [Double] = []
         var accentLike = 0
+        // 出现过的色相桶。用来回答一个「墨迹比例答不了」的问题：图上**有没有照片**。
+        // 缩略图没解码出来时，网格里是一片灰色占位符 —— 它同样有墨迹、同样让页面
+        // 「渲染成功」，人不去看图根本发现不了。而照片是彩色的，色相天然分散。
+        var hueBuckets = Set<Int>()
         let stepX = max(1, width / 220)
         let stepY = max(1, height / 150)
         var y = 0
@@ -849,6 +1076,7 @@ enum UIRenderCheck {
                     samples += 1
 
                     if b > g + 0.10, g > r + 0.05, b > 0.60 { accentLike += 1 }
+                    if let bucket = hueBucket(r, g, b) { hueBuckets.insert(bucket) }
                 }
                 x += stepX
             }
@@ -907,6 +1135,34 @@ enum UIRenderCheck {
                             digest: digest,
                             accentLikeCount: accentLike,
                             leadingEdgeInk: edges.leading,
-                            trailingEdgeInk: edges.trailing)
+                            trailingEdgeInk: edges.trailing,
+                            hueBucketCount: hueBuckets.count)
+    }
+
+    /// 把颜色映射到 12 个色相桶之一；灰色与接近全黑 / 全白的不计入（返回 nil）。
+    ///
+    /// 「有没有画东西」用墨迹比例就能判，但**空占位符也有墨迹** ——
+    /// 一片灰色转圈框同样能通过那条判据，而缩略图网格页真正的缺陷恰恰是「图没出来」。
+    /// 这里补一个正交的判据：照片是彩色的，色相分布天然散开；
+    /// 整片灰底时桶数会塌到 1–2 个。两者一起看才分得清「画了内容」和「画了照片」。
+    private static func hueBucket(_ r: Double, _ g: Double, _ b: Double) -> Int? {
+        let maxValue = max(r, g, b)
+        let minValue = min(r, g, b)
+        let delta = maxValue - minValue
+        // 太暗、太亮、或几乎无彩色的像素不参与统计（它们本来就是灰阶）
+        guard maxValue > 0.18, maxValue < 0.97, delta > 0.06 else { return nil }
+        guard delta / max(maxValue, 0.0001) > 0.12 else { return nil }
+
+        var hue: Double
+        if maxValue == r {
+            hue = ((g - b) / delta).truncatingRemainder(dividingBy: 6)
+        } else if maxValue == g {
+            hue = (b - r) / delta + 2
+        } else {
+            hue = (r - g) / delta + 4
+        }
+        hue *= 60
+        if hue < 0 { hue += 360 }
+        return Int(hue / 30) % 12
     }
 }
