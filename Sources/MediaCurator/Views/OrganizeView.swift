@@ -349,41 +349,62 @@ struct OrganizeView: View {
     }
 
     // MARK: - 筛选
+    //
+    // 与扫描页的选项区同一套排版约定（见 `ScanView` 里 `optionsCard` 的注释）：
+    // 分组小标题 + 控件贴齐列右边缘 + 从属项挂在竖线后面。
+    //
+    // 原先这一卡分两列，宽度写的是 260 / 330，而「最低像素数」那一行的内容
+    // （标签 84 + 输入框 90 + 一句说明 ≈ 190）加起来约 375 点 —— **比它自己声明的列宽还宽**。
+    // 溢出的部分正好被右边的空白吃掉，所以一直没暴露；窗口再窄一点就会顶到卡片边界。
+    // 把说明改成行下小字、输入框贴齐右边缘之后，这一行不再有硬编码宽度可言。
 
     private var filterCard: some View {
         SectionCard(title: "筛选条件", subtitle: "只有满足条件的文件才会进入计划",
                     symbol: "line.3.horizontal.decrease.circle") {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 34) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        CheckRow(title: "只处理重复副本",
-                                     subtitle: "忽略归档，仅做重复清理",
-                                     isOn: $state.filter.onlyRedundantDuplicates)
-                        CheckRow(title: "包含图片", subtitle: nil, isOn: $state.filter.includeImages)
-                        CheckRow(title: "包含视频", subtitle: nil, isOn: $state.filter.includeVideos)
-                    }
-                    .frame(width: 260)
+                    contentFilterOptions
+                    dateAndPixelOptions
+                    Spacer(minLength: 0)
+                }
 
-                    VStack(alignment: .leading, spacing: 9) {
-                        HStack(spacing: 8) {
-                            Text("拍摄时间范围").font(.system(size: 12))
-                                .frame(width: 84, alignment: .leading)
-                            Toggle("", isOn: Binding(
-                                get: { state.rule.dateFrom != nil || state.rule.dateTo != nil },
-                                set: { on in
-                                    if on {
-                                        state.rule.dateFrom = Calendar.current.date(byAdding: .year, value: -10, to: Date())
-                                        state.rule.dateTo = Date()
-                                    } else {
-                                        state.rule.dateFrom = nil
-                                        state.rule.dateTo = nil
-                                    }
-                                }))
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .labelsHidden()
-                        }
-                        if state.rule.dateFrom != nil || state.rule.dateTo != nil {
+                if !state.availableDevices.isEmpty {
+                    Divider()
+                    deviceFilterOptions
+                }
+            }
+        }
+    }
+
+    /// 按内容筛：哪一类文件进计划、是不是只做重复清理。
+    private var contentFilterOptions: some View {
+        OptionGroup(title: "处理内容", symbol: "square.on.square.dashed") {
+            VStack(alignment: .leading, spacing: 10) {
+                // 原文案写的是「忽略归档，仅做重复清理」，但这一项其实只是个**范围**过滤：
+                // 它把非重复副本剔出计划，至于剩下的重复副本是清理还是归档，
+                // 仍由「要做哪些事」里的两个开关决定。文案按实现收窄，别承诺代码没做的事。
+                CheckRow(title: "只处理重复副本", subtitle: "只把重复副本纳入计划",
+                         isOn: $state.filter.onlyRedundantDuplicates)
+                CheckRow(title: "包含图片", subtitle: "jpg / heic / png / tiff 等",
+                         isOn: $state.filter.includeImages)
+                CheckRow(title: "包含视频", subtitle: "mp4 / mov / m4v 等",
+                         isOn: $state.filter.includeVideos)
+            }
+        }
+        .frame(maxWidth: optionColumnWidth, alignment: .leading)
+    }
+
+    /// 按拍摄时间与像素筛。
+    private var dateAndPixelOptions: some View {
+        OptionGroup(title: "拍摄时间与像素", symbol: "calendar") {
+            VStack(alignment: .leading, spacing: 10) {
+                CheckRow(title: "拍摄时间范围", subtitle: nil, isOn: dateRangeEnabled)
+
+                if dateRangeEnabled.wrappedValue {
+                    // 两个日期连同「拍摄时间未知会被排除」都是从属关系，
+                    // 挂在竖线后面，与扫描页的查重组保持同一种读法。
+                    NestedOptions(isActive: true) {
+                        VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
                                 DatePicker("", selection: Binding(
                                     get: { state.rule.dateFrom ?? Date() },
@@ -395,46 +416,60 @@ struct OrganizeView: View {
                                     set: { state.rule.dateTo = $0 }), displayedComponents: .date)
                                     .labelsHidden()
                             }
-                            Text("拍摄时间未知的文件会被排除")
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(.tertiary)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text("最低像素数").font(.system(size: 12))
-                                .frame(width: 84, alignment: .leading)
-                            TextField("", value: $state.filter.minimumPixelCount, format: .number)
-                                .frame(width: 90)
-                                .textFieldStyle(.roundedBorder)
-                                .controlSize(.small)
-                            Text("例如 1000000 约等于 100 万像素").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+                            OptionHint(text: "拍摄时间未知的文件会被排除。")
                         }
                     }
-                    .frame(width: 330)
-
-                    Spacer()
                 }
 
-                if !state.availableDevices.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(spacing: 8) {
-                            Text("只处理这些设备").font(.system(size: 12))
-                            TagChip(text: state.rule.deviceFilter.isEmpty
-                                    ? "全部设备" : "已选 \(state.rule.deviceFilter.count)",
-                                    tint: Palette.accent, filled: false)
-                            if !state.rule.deviceFilter.isEmpty {
-                                Button("清除") { state.rule.deviceFilter.removeAll() }
-                                    .controlSize(.mini)
-                            }
-                            Spacer()
-                        }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 7)], spacing: 7) {
-                            ForEach(state.availableDevices, id: \.self) { device in
-                                deviceChip(device)
-                            }
-                        }
-                    }
+                OptionRow(title: "最低像素数",
+                          hint: "例如 1000000 约等于 100 万像素。") {
+                    TextField("", value: $state.filter.minimumPixelCount, format: .number)
+                        .frame(width: 96)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                }
+            }
+        }
+        .frame(maxWidth: optionColumnWidth, alignment: .leading)
+    }
+
+    /// 时间范围开关：两侧都为空才算关；写回时一次把起止都设上或都清掉，
+    /// 免得出现「只设了起始、没有结束」这种半开状态 —— 那种状态在界面上看不出来，
+    /// 但过滤行为已经变了。
+    private var dateRangeEnabled: Binding<Bool> {
+        Binding(
+            get: { state.rule.dateFrom != nil || state.rule.dateTo != nil },
+            set: { on in
+                if on {
+                    state.rule.dateFrom = Calendar.current.date(byAdding: .year, value: -10, to: Date())
+                    state.rule.dateTo = Date()
+                } else {
+                    state.rule.dateFrom = nil
+                    state.rule.dateTo = nil
+                }
+            })
+    }
+
+    /// 设备筛选。
+    ///
+    /// 芯片是自适应网格，所以这一组占满整宽；状态与「清除」放到标题行右端 ——
+    /// 原先它们夹在标题后面，网格一换行就与标题错开，看着像两个不相干的东西。
+    private var deviceFilterOptions: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                OptionGroupTitle(title: "只处理这些设备", symbol: "camera")
+                Spacer(minLength: 8)
+                TagChip(text: state.rule.deviceFilter.isEmpty
+                        ? "全部设备" : "已选 \(state.rule.deviceFilter.count)",
+                        tint: Palette.accent, filled: false)
+                if !state.rule.deviceFilter.isEmpty {
+                    Button("清除") { state.rule.deviceFilter.removeAll() }
+                        .controlSize(.mini)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 7)], spacing: 7) {
+                ForEach(state.availableDevices, id: \.self) { device in
+                    deviceChip(device)
                 }
             }
         }

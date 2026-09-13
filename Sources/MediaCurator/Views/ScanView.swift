@@ -3,7 +3,6 @@ import AppKit
 
 struct ScanView: View {
     @ObservedObject var state: AppState
-    @State private var showAdvanced = true
     @State private var showFailures = false
 
     private var isBusy: Bool { state.progress.phase.isBusy }
@@ -145,112 +144,149 @@ struct ScanView: View {
     }
 
     // MARK: - 选项
+    //
+    // 这一区有十来个控件，原先只是「两列 + 两条分隔线」把它们摊在一起：
+    // 两列宽度不等（250 / 300）、开关与输入框各贴各的右边界、行距也疏密不一，
+    // 视线扫过去找不到落点 —— 而这里恰恰是每次扫描前都要过一眼的地方。
+    //
+    // 现在按「在问什么」分成三组：扫描内容 / 读取与性能 / 查重。三条硬规则：
+    // 1. 每组都有小标题 —— 用户是先找标题再看开关，不是逐行读过去；
+    // 2. 同一列里每个控件都贴齐列右边缘 —— 否则会冒出好几个右边界，看着就是一堆参差的方块；
+    // 3. 从属于某个开关的选项挂在一条竖线后面，竖线随主开关亮灭 ——
+    //    「关掉它以后哪几项就不起作用了」不用靠猜。
 
     private var optionsCard: some View {
-        SectionCard(title: "扫描选项", subtitle: "影响速度与查重的判定范围", symbol: "slider.horizontal.3") {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 28) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        CheckRow(title: "包含图片", subtitle: nil, isOn: $state.settings.includeImages)
-                        CheckRow(title: "包含视频", subtitle: nil, isOn: $state.settings.includeVideos)
-                        CheckRow(title: "跳过隐藏文件与包目录", subtitle: nil, isOn: $state.settings.skipHidden)
-                        CheckRow(title: "复用指纹缓存", subtitle: "未修改的文件不重复计算",
-                                 isOn: $state.settings.useHashCache)
-                    }
-                    .frame(width: 250)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        CheckRow(title: "视频相似度比对", subtitle: "抽帧比对，耗时主要来自解码",
-                                 isOn: $state.settings.enableVideoSimilarity)
-                        CheckRow(title: "允许 ffmpeg 兜底", subtitle: "处理系统解码器不支持的格式",
-                                 isOn: $state.settings.useFFmpegFallback)
-
-                        HStack(spacing: 8) {
-                            Text("最小文件体积")
-                                .font(.system(size: 12))
-                                .frame(width: 118, alignment: .leading)
-                            TextField("", value: Binding(
-                                get: { Int(state.settings.minimumFileSize / 1024) },
-                                set: { state.settings.minimumFileSize = Int64(max(0, $0)) * 1024 }
-                            ), format: .number)
-                            .frame(width: 62)
-                            .textFieldStyle(.roundedBorder)
-                            .controlSize(.small)
-                            Text("KB").font(.system(size: 11)).foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(width: 300)
+        SectionCard(title: "扫描选项", subtitle: "影响速度与查重的判定范围",
+                    symbol: "slider.horizontal.3") {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 34) {
+                    scopeOptions
+                    readingOptions
+                    Spacer(minLength: 0)
                 }
 
                 Divider()
 
-                HStack(alignment: .center, spacing: 26) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text("相似判定阈值")
-                                .font(.system(size: 12))
-                            TagChip(text: "汉明距离 ≤ \(state.settings.similarityThreshold)",
-                                    tint: Palette.accent)
-                            if state.isDedupRunning {
-                                ProgressView().controlSize(.mini)
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Text("严格").font(.system(size: 10)).foregroundStyle(.tertiary)
-                            Slider(value: Binding(
-                                get: { Double(state.settings.similarityThreshold) },
-                                set: { state.settings.similarityThreshold = Int($0.rounded()) }
-                            ), in: 0...16, step: 1) { editing in
-                                if !editing { state.scheduleThresholdRecompute() }
-                            }
-                            .frame(width: 240)
-                            Text("宽松").font(.system(size: 10)).foregroundStyle(.tertiary)
-                        }
-                        Text("越小越严格。0–2 只找几乎一模一样的，6 左右适合识别同一次拍摄的不同版本，"
-                             + "超过 10 容易把无关照片并到一起。")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: 430, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                dedupOptions
+            }
+        }
+    }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("视频容器时间")
-                            .font(.system(size: 12))
-                        Picker("", selection: $state.settings.interpretVideoTimeAsLocalWallClock) {
-                            Text("按本机钟表时间解释（推荐）").tag(true)
-                            Text("按 UTC 换算到本机时区").tag(false)
-                        }
-                        .labelsHidden()
-                        .frame(width: 240)
-                        Text("多数相机与安卓设备会把当地时间直接写进 UTC 字段；"
-                             + "Apple 设备则严格写 UTC。选错会让视频目录整体偏一个时区。")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: 300, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer()
-                }
-
-                Divider()
-
-                HStack(spacing: 8) {
-                    Text("视频抽帧数")
-                        .font(.system(size: 12))
-                    Stepper(value: $state.settings.videoFrameSamples, in: 2...16) {
-                        Text("\(state.settings.videoFrameSamples) 帧")
-                            .font(.system(size: 12, design: .rounded))
-                            .frame(width: 52, alignment: .leading)
-                    }
+    /// 决定哪些文件进库。
+    private var scopeOptions: some View {
+        OptionGroup(title: "扫描内容", symbol: "photo.on.rectangle.angled") {
+            VStack(alignment: .leading, spacing: 10) {
+                CheckRow(title: "包含图片", subtitle: "含 HEIC 与 RAW（DNG / CR3 / NEF 等）",
+                         isOn: $state.settings.includeImages)
+                CheckRow(title: "包含视频", subtitle: "含 MKV / AVI / MTS 等常见容器",
+                         isOn: $state.settings.includeVideos)
+                // 隐藏文件与包目录是两个独立开关。原先合成一个，标签写着「与包目录」
+                // 而绑定只有 skipHidden —— 引擎那边又把「跳过包」写死开启，
+                // 于是这个设置项整条都是假的。拆开才是它声称的那件事。
+                CheckRow(title: "跳过隐藏文件", subtitle: "以 . 开头的文件与目录",
+                         isOn: $state.settings.skipHidden)
+                CheckRow(title: "跳过包目录", subtitle: "照片图库与 .app 这类被系统视作单个文件的目录",
+                         isOn: $state.settings.skipPackages)
+                OptionRow(title: "最小文件体积（KB）",
+                          hint: "更小的文件不进库，用来滤掉缩略图缓存这类噪音。") {
+                    TextField("", value: Binding(
+                        get: { Int(state.settings.minimumFileSize / 1024) },
+                        set: { state.settings.minimumFileSize = Int64(max(0, $0)) * 1024 }
+                    ), format: .number)
+                    .frame(width: 84)
+                    .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
-                    Text("抽帧越多，越能识别被剪辑过的同一段视频，代价是解码时间线性增加。")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.tertiary)
-                    Spacer()
                 }
             }
+        }
+        .frame(maxWidth: optionColumnWidth, alignment: .leading)
+    }
+
+    /// 决定怎么读、读得多快。
+    private var readingOptions: some View {
+        OptionGroup(title: "读取与性能", symbol: "speedometer") {
+            VStack(alignment: .leading, spacing: 10) {
+                CheckRow(title: "复用指纹缓存", subtitle: "未修改的文件不重复计算",
+                         isOn: $state.settings.useHashCache)
+                CheckRow(title: "允许 ffmpeg 兜底", subtitle: "处理系统解码器不支持的格式",
+                         isOn: $state.settings.useFFmpegFallback)
+                OptionRow(title: "视频抽帧数",
+                          hint: "抽帧越多越能识别被剪辑过的同一段视频；解码时间随之线性增加。") {
+                    HStack(spacing: 8) {
+                        Text("\(state.settings.videoFrameSamples) 帧")
+                            .font(.system(size: 12, design: .rounded))
+                            .monospacedDigit()
+                            .frame(width: 34, alignment: .trailing)
+                        Stepper("", value: $state.settings.videoFrameSamples, in: 2...16)
+                            .labelsHidden()
+                            .controlSize(.small)
+                    }
+                }
+                OptionRow(title: "视频容器时间",
+                          hint: "多数相机与安卓设备写的是当地时间，Apple 设备严格写 UTC；"
+                              + "选错会让视频目录整体偏一个时区。") {
+                    Picker("", selection: $state.settings.interpretVideoTimeAsLocalWallClock) {
+                        Text("按本机钟表时间解释（推荐）").tag(true)
+                        Text("按 UTC 换算到本机时区").tag(false)
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
+                }
+            }
+        }
+        .frame(maxWidth: optionColumnWidth, alignment: .leading)
+    }
+
+    /// 决定扫完要不要比对、怎么比对。
+    ///
+    /// 主开关与它管辖的项收在同一组里。关掉时**不把下面的项藏起来** ——
+    /// 藏起来用户就看不到自己设过什么了，改成变灰，保留「我这样设过」的记忆。
+    private var dedupOptions: some View {
+        OptionGroup(title: "查重", symbol: "square.on.square.dashed") {
+            VStack(alignment: .leading, spacing: 12) {
+                CheckRow(title: "检查重复媒体",
+                         subtitle: "找出重复与相似的图片、视频；关闭则跳过整个比对阶段，扫描更快",
+                         isOn: $state.settings.checkDuplicates)
+
+                NestedOptions(isActive: state.settings.checkDuplicates) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        thresholdRow
+                        CheckRow(title: "视频相似度比对", subtitle: "抽帧比对；耗时主要来自解码",
+                                 isOn: $state.settings.enableVideoSimilarity)
+                    }
+                }
+                .disabled(!state.settings.checkDuplicates)
+            }
+        }
+        .frame(maxWidth: optionColumnWidth, alignment: .leading)
+    }
+
+    /// 相似判定阈值。
+    ///
+    /// 滑块不设固定宽度，跟着这一列一起伸缩 —— 它本来就该越宽越好调，
+    /// 原先钉死 240 点只是为了让两列凑出固定的总宽。
+    private var thresholdRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                Text("相似判定阈值").font(.system(size: 12))
+                Spacer(minLength: 12)
+                if state.isDedupRunning {
+                    ProgressView().controlSize(.mini)
+                }
+                TagChip(text: "汉明距离 ≤ \(state.settings.similarityThreshold)",
+                        tint: Palette.accent)
+            }
+            HStack(spacing: 8) {
+                Text("严格").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Slider(value: Binding(
+                    get: { Double(state.settings.similarityThreshold) },
+                    set: { state.settings.similarityThreshold = Int($0.rounded()) }
+                ), in: 0...16, step: 1) { editing in
+                    if !editing { state.scheduleThresholdRecompute() }
+                }
+                Text("宽松").font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+            OptionHint(text: "越小越严格：0–2 只找几乎一模一样的，6 左右适合识别同一次拍摄的不同版本，超过 10 容易把无关照片并到一起。")
         }
     }
 

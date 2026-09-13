@@ -48,17 +48,17 @@
       </p>
 
       <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-arm64.zip">
+        <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.3/MediaCurator-v1.0.3-arm64.zip">
           <span class="btn-title">下载 for Apple Silicon</span>
-          <span class="btn-sub">arm64 · 2.5 MB</span>
+          <span class="btn-sub">arm64 · 2.7 MB</span>
         </a>
-        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-universal.zip">
+        <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.3/MediaCurator-v1.0.3-universal.zip">
           <span class="btn-title">下载通用版</span>
-          <span class="btn-sub">Intel + Apple Silicon · 4.0 MB</span>
+          <span class="btn-sub">Intel + Apple Silicon · 4.2 MB</span>
         </a>
       </div>
 
-      <p class="version-pill"><strong>v1.0.2</strong> · 新增「所有媒体」页：逐个勾选清理、按子目录标记「不参与整理」</p>
+      <p class="version-pill"><strong>v1.0.3</strong> · 扫描选项与筛选条件重新分组排版；「扫描后查重」改名「检查重复媒体」，隐藏文件与包目录拆成两个开关</p>
 
       <ul class="hero-facts">
         <li><strong>macOS 14+</strong> 起</li>
@@ -110,9 +110,16 @@
             <h3>扫描</h3>
             <p>选择目录后读取拍摄时间、设备信息与内容指纹。<strong>全程只读</strong>，不改动任何文件。
                第二次扫描会复用缓存，通常快一个数量级。</p>
+            <p>选项按「扫描内容 / 读取与性能 / 查重」三组分开放：每组一个小标题，
+               控件统一贴齐每列右边缘，查重那一组挂在主开关后面 ——
+               关掉主开关时它会变灰，一眼能看出哪几项跟着失效。</p>
+            <p>「<strong>检查重复媒体</strong>」这一项可以关掉：那时只把文件扫进来、不做重复与相似比对，
+               适合暂时不关心重复、只想先浏览和整理目录结构的场景（「所有媒体」页照常有内容）。
+               <strong>隐藏文件</strong>与<strong>包目录</strong>（照片图库、<code>.app</code>）是两个独立开关 ——
+               想扫描「照片图库」内部的原始文件时，把后一个关掉即可。</p>
           </div>
           <figure class="shot">
-            <img src="images/scan.png" width="1400" height="925" alt="扫描页：选择源目录、并发线程数、文件体积下限、各类开关与扫描进度。" loading="lazy">
+            <img src="images/scan.png" width="1400" height="925" alt="扫描页：选择源目录、并发线程数、文件体积下限、检查重复媒体等开关与扫描进度。" loading="lazy">
           </figure>
         </li>
 
@@ -123,15 +130,16 @@
             <p>把扫到的文件<strong>全部摊开</strong>，按类型筛选、按拍摄时间或体积排序，点开就能放大看。
                想清哪几张就勾哪几张 —— 这一页完全由你点名，程序不参与判断，
                所以它也是唯一能把某几张「看着不想要」的照片直接挑出来的地方。</p>
-            <p>上方列出<strong>每个来源目录及其子目录</strong>（含文件数），可以逐个勾选
-               <strong>「不参与整理」</strong>：这些目录里的文件不会被按模板移动或重命名。
+            <p><strong>左侧边栏</strong>列出每个来源目录及其下的所有子目录（含文件数），
+               可以逐个勾选<strong>「不参与整理」</strong>：这些目录里的文件不会被按模板移动或重命名，
                适合结构已经是你想要的样子、或者想留作原样备份的目录。
                目录树<strong>默认只展开到第一层</strong>（更深的层级逐个展开看，也可一键全部折叠）；
-               勾选上级目录时，下级会显示为「随上级」并自动生效。</p>
+               勾选上级目录时，下级会显示为「随上级」并自动生效。
+               它管的是整轮归档，所以在任何页面都能改。</p>
           </div>
           <figure class="shot">
-            <img src="images/all-media-selected.png" width="1400" height="925" alt="所有媒体页：上方是来源目录与子目录列表，下方网格里每个缩略图右上角有勾选圈，已勾选的显示红色描边与对勾。" loading="lazy">
-            <figcaption>勾选要清理的文件（泛红描边加对勾）；上方是来源目录，可逐个标记「不参与整理」</figcaption>
+            <img src="images/all-media-selected.png" width="1400" height="885" alt="所有媒体页：左侧边栏是来源目录与子目录列表，右侧网格里每个缩略图右上角有勾选圈，已勾选的显示红色描边与对勾。" loading="lazy">
+            <figcaption>勾选要清理的文件（泛红描边加对勾）；来源目录在左侧边栏，可逐个标记「不参与整理」</figcaption>
           </figure>
         </li>
 
@@ -365,25 +373,31 @@
             <h3>Apple Silicon 版 <span class="tag">推荐</span></h3>
             <p>适用于 M1 / M2 / M3 / M4 及更新芯片的 Mac</p>
           </div>
-          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-arm64.zip">MediaCurator-v1.0.2-arm64.zip<small>2.5 MB</small></a>
+          <a class="btn btn-primary" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.3/MediaCurator-v1.0.3-arm64.zip">MediaCurator-v1.0.3-arm64.zip<small>2.7 MB</small></a>
         </div>
         <div class="download-row">
           <div>
             <h3>通用版</h3>
             <p>Intel 芯片的 Mac，或不确定自己用哪种芯片时选这个</p>
           </div>
-          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.2/MediaCurator-v1.0.2-universal.zip">MediaCurator-v1.0.2-universal.zip<small>4.0 MB</small></a>
+          <a class="btn" href="https://github.com/zdx8/MediaCurator-macOS/releases/download/v1.0.3/MediaCurator-v1.0.3-universal.zip">MediaCurator-v1.0.3-universal.zip<small>4.2 MB</small></a>
         </div>
       </div>
 
       <p class="req">
-        <strong>v1.0.2 更新</strong>新增「所有媒体」页：把扫到的文件全部摊开，逐个勾选要清理的；
-        并按来源目录的子目录树逐个标记「不参与整理」（只影响归档，不影响清理）。
-        重复项的整组决定保持三态（<code>按选择 / 保留整组 / 都不保留</code>）。
+        <strong>v1.0.3 更新</strong><strong>扫描选项</strong>与<strong>筛选条件</strong>重新分组排版：
+        每组一个小标题、控件统一贴齐列右边缘、从属于主开关的选项挂在一条随开关亮灭的竖线后面。
+        「扫描后查重」改名为「<strong>检查重复媒体</strong>」；原先合成一项的
+        「跳过隐藏文件与包目录」拆成两个独立开关（顺带修好了那个设置其实从未生效的问题 ——
+        包目录以前是被写死跳过的）。
+        另修好若干处：文件名里的日期现在认得 macOS 导出的
+        <code>2024-03-15 14.30.22.jpg</code> 这类写法；
+        源目录路径含符号链接（<code>/tmp</code>、<code>/var</code>）时不会再把自己误判成
+        「已在目标位置」的文件；覆盖策略下甲乙互换文件名不再把其中一个送进回收站。
       </p>
 
       <p class="req">
-        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.2-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.2-机型.zip</code>，内容完全一致。
+        <strong>关于文件名</strong>GitHub 会剥掉附件名里的非 ASCII 字符，所以下载得到的文件名是 <code>MediaCurator-v1.0.3-机型.zip</code>；本地打包脚本产出的叫 <code>影像管家-v1.0.3-机型.zip</code>，内容完全一致。
       </p>
 
       <p class="req">

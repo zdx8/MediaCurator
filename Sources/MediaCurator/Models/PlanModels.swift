@@ -112,8 +112,8 @@ struct PlanSummary {
     var moveBytes: Int64 = 0
     var reclaimableBytes: Int64 = 0
 
+    /// 待执行项数（已勾选的四个可变类型之和）
     var totalSelected: Int { moveCount + renameCount + copyCount + trashCount }
-    var totalRows: Int { totalSelected + skippedCount + alreadyPlacedCount }
 
     var moveBytesLabel: String {
         ByteCountFormatter.string(fromByteCount: moveBytes, countStyle: .file)
@@ -122,18 +122,23 @@ struct PlanSummary {
         ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file)
     }
 
+    /// 四个可变类型的计数与字节数**都只看 `selected`**。
+    ///
+    /// 原先计数不看、字节看：用户在确认页取消勾选之后，同一张卡片会自相矛盾 ——
+    /// 「移入回收站 3 个」还算着取消掉的那条，而它下面的「可释放 1.2 MB」已经跌到 1 条的量。
+    /// 「跳过 / 无需处理」本来就不可勾选（`OperationKind.isMutating == false`），按总数统计。
     static func compute(from ops: [PlanOperation]) -> PlanSummary {
         var s = PlanSummary()
         for op in ops {
             switch op.kind {
             case .move:
-                s.moveCount += 1
-                if op.selected { s.moveBytes += op.fileSize }
-            case .rename: s.renameCount += 1
-            case .copy: s.copyCount += 1
+                if op.selected { s.moveCount += 1; s.moveBytes += op.fileSize }
+            case .rename:
+                if op.selected { s.renameCount += 1 }
+            case .copy:
+                if op.selected { s.copyCount += 1 }
             case .trash:
-                s.trashCount += 1
-                if op.selected { s.reclaimableBytes += op.fileSize }
+                if op.selected { s.trashCount += 1; s.reclaimableBytes += op.fileSize }
             case .skipped: s.skippedCount += 1
             case .alreadyPlaced: s.alreadyPlacedCount += 1
             }

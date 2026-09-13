@@ -501,6 +501,120 @@ struct CheckRow: View {
     }
 }
 
+// MARK: - 选项行
+
+/// 选项列的宽度上限，扫描页与整理规则页共用。
+///
+/// 470 是「最长的标签 + 最宽的控件」都放得下、又不会让标签与控件离得太远的宽度。
+/// **不跟着卡片自由伸缩**：卡片宽度随窗口变化，放任伸缩的话宽屏上开关会漂到
+/// 离标签几百点的右边缘、窄屏上又被压到换行 —— 同一组选项在不同窗口下长得完全不一样。
+let optionColumnWidth: CGFloat = 470
+
+/// 分组小标题。
+///
+/// 单独拎出来而不只做 `OptionGroup` 的内部实现，是因为有的分组要在标题行右端
+/// 放状态与动作（例如设备筛选的「已选 N / 清除」）—— 那些东西夹在标题后面，
+/// 一旦内容换行就会与标题错开。
+struct OptionGroupTitle: View {
+    var title: String
+    var symbol: String?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+                    .frame(width: 13)
+            }
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 一组选项：小标题 + 内容。
+///
+/// 一屏里有十来个开关时，用户不是逐个读，而是先扫标题找自己关心的那一类。
+/// 没有标题就只能一行行看过去 —— 这才是选项区看起来「乱」的主要来源，
+/// 与开关排得多整齐无关。
+struct OptionGroup<Content: View>: View {
+    var title: String
+    var symbol: String?
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            OptionGroupTitle(title: title, symbol: symbol)
+            content()
+        }
+    }
+}
+
+/// 带控件的选项行：标签在左，控件贴齐右边缘。
+///
+/// 右边缘对齐是选项区的关键约定 —— `CheckRow` 的开关就在右边缘，
+/// 数值输入框、下拉框若各按各的宽度摆放，同一列里就会冒出好几个右边界，
+/// 视觉上成了参差不齐的一堆方块。
+struct OptionRow<Control: View>: View {
+    var title: String
+    var hint: String?
+    @ViewBuilder var control: () -> Control
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                Text(title).font(.system(size: 12))
+                Spacer(minLength: 12)
+                control()
+            }
+            if let hint {
+                OptionHint(text: hint)
+            }
+        }
+    }
+}
+
+/// 从属于上方某个开关的一组设置：左边一条竖线把它挂住。
+///
+/// 竖线随主开关亮灭：关掉上面的开关以后，下面这几项到底还起不起作用，
+/// 看一眼线的颜色就知道 —— 光把控件变灰，说明不了它们与上面那个开关的从属关系。
+///
+/// 注意这里**不代替调用方做 `.disabled`**：哪些控件该一并禁用由调用方判断，
+/// 这个组件只负责「看得出从属关系」。
+struct NestedOptions<Content: View>: View {
+    var isActive: Bool
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Capsule()
+                .fill(isActive ? Palette.accent.opacity(0.5) : Color(nsColor: .separatorColor))
+                .frame(width: 2)
+                .frame(maxHeight: .infinity)
+
+            content()
+                .opacity(isActive ? 1 : 0.55)
+        }
+    }
+}
+
+/// 选项行下面的一行小字。
+///
+/// 一律 `fixedSize(vertical:)`：这类说明多数要折成两三行，
+/// 少了它就会被父视图压成一行截断，而截断掉的那半句恰恰是「为什么要有这个选项」。
+struct OptionHint: View {
+    var text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 // MARK: - 键值行
 
 struct KeyValueRow: View {

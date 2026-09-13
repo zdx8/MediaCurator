@@ -19,6 +19,11 @@ struct DuplicatesView: View {
     }
 
     var body: some View {
+        // `itemsByID` 是一次 O(文件数) 的字典构建，而下面每张分组卡片都要用它。
+        // 放在 `resolvedMembers` 里按卡片各建一次，60 张可见卡片就是 60 遍全量遍历 ——
+        // 几万个文件的库上，每次重绘都会卡一下。这里算一次，往下传。
+        let byID = state.itemsByID
+
         VStack(alignment: .leading, spacing: 0) {
             // 页头右侧只放**一个**主动作。页头右侧分到的是标题与副标题剩下的宽度
             // （最小窗口下约 420pt），按钮一多就必然被压缩 —— 这是「生成清理计划
@@ -32,12 +37,10 @@ struct DuplicatesView: View {
 
             if state.groups.isEmpty {
                 EmptyState(symbol: "square.on.square.dashed",
-                           title: state.items.isEmpty ? "还没有扫描结果" : "没有发现重复或相似的文件",
-                           message: state.items.isEmpty
-                               ? "先在「扫描」页选择目录并完成一次扫描。"
-                               : "当前阈值下没有判定出重复项。可以回到扫描页把「相似判定阈值」调大一些再试。",
-                           actionTitle: state.items.isEmpty ? "去扫描" : nil,
-                           action: state.items.isEmpty ? { state.page = .scan } : nil)
+                           title: emptyTitle,
+                           message: emptyMessage,
+                           actionTitle: emptyNeedsScanPage ? "去扫描页" : nil,
+                           action: emptyNeedsScanPage ? { state.page = .scan } : nil)
             } else {
                 toolRow
                     .padding(.horizontal, 22)
@@ -52,12 +55,12 @@ struct DuplicatesView: View {
                         ForEach(groups.prefix(visibleCount)) { group in
                             DuplicateGroupCard(
                                 group: group,
-                                items: resolvedMembers(group),
+                                items: resolvedMembers(group, byID: byID),
                                 isKeep: { state.isKeep($0, in: group) },
                                 isLastKeep: { state.isLastKeep($0, in: group) },
                                 onToggleKeep: { state.toggleKeep(groupID: group.id, memberID: $0) },
                                 onPreview: { itemID in
-                                    previewIndex = resolvedMembers(group)
+                                    previewIndex = resolvedMembers(group, byID: byID)
                                         .firstIndex { $0.id == itemID } ?? 0
                                     previewGroupID = group.id
                                 },
@@ -87,7 +90,7 @@ struct DuplicatesView: View {
         .overlay {
             if let group = previewGroup {
                 MediaPreviewOverlay(
-                    items: resolvedMembers(group),
+                    items: resolvedMembers(group, byID: byID),
                     index: $previewIndex,
                     keepIDs: group.keepIDs,
                     disposition: group.disposition,
@@ -101,9 +104,37 @@ struct DuplicatesView: View {
         .animation(.easeInOut(duration: 0.16), value: previewGroupID)
     }
 
-    private func resolvedMembers(_ group: DuplicateGroup) -> [MediaItem] {
-        let byID = state.itemsByID
-        return group.memberIDs.compactMap { byID[$0] }
+    /// 把分组的成员 id 解析成条目。`byID` 由调用方在 `body` 里算一次传进来 ——
+    /// 这里自己再建一遍字典就会变成「每张卡片各遍历一次全量文件」。
+    private func resolvedMembers(_ group: DuplicateGroup,
+                                 byID: [UUID: MediaItem]) -> [MediaItem] {
+        group.memberIDs.compactMap { byID[$0] }
+    }
+
+    // MARK: - 空状态
+
+    /// 空状态有**三种**成因，混成一句会误导人：
+    /// 没扫过、扫了但关了查重、查了但确实没有重复。
+    /// 中间那种最容易被当成「这个工具什么也没找出来」，所以要明确让人回扫描页打开开关。
+    private var emptyTitle: String {
+        if state.items.isEmpty { return "还没有扫描结果" }
+        if !state.settings.checkDuplicates { return "本次扫描没有检查重复" }
+        return "没有发现重复或相似的文件"
+    }
+
+    private var emptyMessage: String {
+        if state.items.isEmpty {
+            return "先在「扫描」页选择目录并完成一次扫描。"
+        }
+        if !state.settings.checkDuplicates {
+            return "扫描页的「检查重复媒体」是关闭状态 —— 文件已经扫进来了，"
+                + "但没有做重复与相似比对。打开它、重新扫描一次即可。"
+        }
+        return "当前阈值下没有判定出重复项。可以回到扫描页把「相似判定阈值」调大一些再试。"
+    }
+
+    private var emptyNeedsScanPage: Bool {
+        state.items.isEmpty || !state.settings.checkDuplicates
     }
 
     // MARK: - 顶部操作

@@ -15,7 +15,7 @@ ROOT="$(pwd)"
 DIST="$ROOT/dist"
 APP_NAME="MediaCurator"
 DISPLAY_NAME="影像管家"
-VERSION="1.0.2"
+VERSION="1.0.3"
 
 # ---------- 1. 组装 .app ----------
 "$ROOT/Scripts/build_app.sh"

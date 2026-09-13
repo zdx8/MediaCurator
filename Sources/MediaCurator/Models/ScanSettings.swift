@@ -8,6 +8,13 @@ struct ScanSettings: Codable, Equatable {
 
     var includeImages: Bool = true
     var includeVideos: Bool = true
+    /// 扫描完成后是否执行重复 / 相似比对。
+    ///
+    /// 关掉它只影响**查重这一步**：文件照样被枚举、元数据与指纹照样读取，
+    /// 「所有媒体」页与按规则归档都不受影响 —— 只是想跳过耗时最长的比对阶段时用。
+    /// 注意它不会把「重复项」页的历史结论留着：每次扫描的 `MediaItem.id` 都是新的，
+    /// 旧分组里的成员会全部失效，所以关掉查重时分组必须一并清空。
+    var checkDuplicates: Bool = true
     /// 跳过以 `.` 开头的隐藏文件与隐藏目录
     var skipHidden: Bool = true
     /// 跳过包目录（.app / .photoslibrary 等）
@@ -43,6 +50,41 @@ struct ScanSettings: Codable, Equatable {
 
     /// 用于比较的时间容差：同一秒内视为同一时刻
     static let captureTolerance: TimeInterval = 1.0
+
+    init() {}
+
+    // 手写解码：这个结构体会被持久化成用户偏好，而**合成的解码器不会使用字段默认值** ——
+    // 增一个字段，所有人已保存的偏好都会整体解析失败、悄悄回落到出厂设置。
+    // 每个字段都用 `try?` + 默认值，缺哪个补哪个。
+    enum CodingKeys: String, CodingKey {
+        case sourceFolders, includeImages, includeVideos, skipHidden, skipPackages
+        case minimumFileSize, checkDuplicates
+        case videoFrameSamples, enableVideoSimilarity, useFFmpegFallback
+        case similarityThreshold, videoFrameTolerance, videoDurationTolerance, aspectRatioTolerance
+        case interpretVideoTimeAsLocalWallClock, useHashCache, workerCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sourceFolders = (try? c.decode([String].self, forKey: .sourceFolders)) ?? []
+        includeImages = (try? c.decode(Bool.self, forKey: .includeImages)) ?? true
+        includeVideos = (try? c.decode(Bool.self, forKey: .includeVideos)) ?? true
+        skipHidden = (try? c.decode(Bool.self, forKey: .skipHidden)) ?? true
+        skipPackages = (try? c.decode(Bool.self, forKey: .skipPackages)) ?? true
+        minimumFileSize = (try? c.decode(Int64.self, forKey: .minimumFileSize)) ?? 1024
+        checkDuplicates = (try? c.decode(Bool.self, forKey: .checkDuplicates)) ?? true
+        videoFrameSamples = (try? c.decode(Int.self, forKey: .videoFrameSamples)) ?? 5
+        enableVideoSimilarity = (try? c.decode(Bool.self, forKey: .enableVideoSimilarity)) ?? true
+        useFFmpegFallback = (try? c.decode(Bool.self, forKey: .useFFmpegFallback)) ?? true
+        similarityThreshold = (try? c.decode(Int.self, forKey: .similarityThreshold)) ?? 6
+        videoFrameTolerance = (try? c.decode(Double.self, forKey: .videoFrameTolerance)) ?? 0.4
+        videoDurationTolerance = (try? c.decode(Double.self, forKey: .videoDurationTolerance)) ?? 0.15
+        aspectRatioTolerance = (try? c.decode(Double.self, forKey: .aspectRatioTolerance)) ?? 0.12
+        interpretVideoTimeAsLocalWallClock =
+            (try? c.decode(Bool.self, forKey: .interpretVideoTimeAsLocalWallClock)) ?? true
+        useHashCache = (try? c.decode(Bool.self, forKey: .useHashCache)) ?? true
+        workerCount = (try? c.decode(Int.self, forKey: .workerCount)) ?? 0
+    }
 
     var effectiveWorkers: Int {
         if workerCount > 0 { return min(workerCount, 32) }

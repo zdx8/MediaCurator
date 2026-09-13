@@ -124,6 +124,73 @@ enum SelfTest {
                           "视频抽帧指纹（\(clip.videoFrames?.count ?? 0) 帧）")
         }
 
+        // ---------- 隐藏文件与包目录 ----------
+        // 这两个开关曾经是「一个标签、两条互不相干的路径」：界面上写着「跳过隐藏文件与包目录」，
+        // 绑定却只有 `skipHidden`；引擎那边又把 `.skipsPackageDescendants` 写死开启，
+        // 而集合插入是幂等的 —— 于是 `skipPackages` 从来没有生效过，界面上也没有入口能关掉它。
+        //
+        // 能抓住这个缺陷的断言只有一条：**关掉开关以后，包目录里的文件必须真的被扫出来**。
+        // 只验「开关打开时被跳过」是不够的 —— 写死开启的那版也照样通过。
+        // 所以这里跑一张真值表，四种组合各扫一次。
+        checker.section("隐藏文件与包目录")
+        let tree = root.appendingPathComponent("special-tree", isDirectory: true)
+        let fm = FileManager.default
+        var treeReady = true
+        let nesting: [(path: String, label: String)] = [
+            ("普通目录/plain.jpg", "普通文件"),
+            (".隐藏目录/hidden.jpg", "隐藏目录里的文件"),
+            ("Sample.app/inner.jpg", "包目录里的文件")
+        ]
+        for entry in nesting {
+            let url = tree.appendingPathComponent(entry.path)
+            try? fm.createDirectory(at: url.deletingLastPathComponent(),
+                                    withIntermediateDirectories: true)
+            guard let image = FixtureBuilder.patternImage(width: 240, height: 160,
+                                                          seed: UInt64(abs(entry.path.hashValue % 9000))),
+                  FixtureBuilder.writeJPEG(image, to: url,
+                                           exifDate: nil, make: nil, model: nil) else {
+                treeReady = false
+                continue
+            }
+        }
+        checker.check(treeReady, "专用目录树素材生成完成（3 个文件）")
+
+        // 判据自证：系统若不把这个目录当包，下面的「跳过包目录」就无从谈起。
+        // 少了这一条，整套断言可能在一个根本不适用它的环境里全绿。
+        let packageProbe = try? tree.appendingPathComponent("Sample.app", isDirectory: true)
+            .resourceValues(forKeys: [.isPackageKey]).isPackage
+        checker.check(packageProbe == true,
+                      "素材准备：Sample.app 被系统认作包目录（否则下面的断言没有意义）")
+
+        /// 用指定的两个开关扫一遍这棵树，返回扫到的文件名集合。
+        func scanTree(skipHidden: Bool, skipPackages: Bool) async -> Set<String> {
+            var s = ScanSettings()
+            s.sourceFolders = [tree.path]
+            s.skipHidden = skipHidden
+            s.skipPackages = skipPackages
+            s.useHashCache = false
+            s.minimumFileSize = 0
+            let result = await MediaIndexer.index(settings: s,
+                                                  cache: FingerprintCache(),
+                                                  onProgress: { _ in })
+            return Set(result.items.map { $0.fileName })
+        }
+
+        let allOff = await scanTree(skipHidden: false, skipPackages: false)
+        checker.equal(allOff, ["plain.jpg", "hidden.jpg", "inner.jpg"],
+                      "两个开关都关掉时三类文件全部入库")
+
+        let skipHiddenOnly = await scanTree(skipHidden: true, skipPackages: false)
+        checker.equal(skipHiddenOnly, ["plain.jpg", "inner.jpg"],
+                      "只跳过隐藏文件时，包目录里的文件仍然入库（这条守着「跳过包被写死」）")
+
+        let skipPackageOnly = await scanTree(skipHidden: false, skipPackages: true)
+        checker.equal(skipPackageOnly, ["plain.jpg", "hidden.jpg"],
+                      "只跳过包目录时，隐藏目录里的文件仍然入库（这条守着两个开关没有接反）")
+
+        let bothOn = await scanTree(skipHidden: true, skipPackages: true)
+        checker.equal(bothOn, ["plain.jpg"], "两个开关都打开时只剩普通文件")
+
         // ---------- 查重 ----------
         checker.section("查重")
         let dedup = await DuplicateDetector.detect(items: outcome.items,
@@ -754,6 +821,123 @@ enum SelfTest {
             checker.equal(sizeOf(URL(fileURLWithPath: clashTarget)), occupantSize,
                           "撤销后被顶替的文件也回到原位")
         }
+
+        // ---------- 文件名里的日期兜底 ----------
+        // `MetadataExtractor` 的注释里承诺支持这几种写法。少支持一种，那批文件的拍摄时间
+        // 就会退回**文件系统时间**（甚至变成「未识别日期」进错目录），
+        // 而界面上完全看不出是解析失败还是这个文件确实没有时间 ——
+        // 注释里写「2024-03-15 14.30.22.jpg」时，正则其实并不接受中间那个空格。
+        checker.section("文件名日期兜底")
+        let nameForms: [(String, String)] = [
+            ("IMG_20240315_143022.jpg", "2024-03-15 14:30:22"),
+            ("PXL_20240315_143022123.jpg", "2024-03-15 14:30:22"),
+            ("2024-03-15 14.30.22.jpg", "2024-03-15 14:30:22"),
+            ("2024-03-15 14:30:22.jpg", "2024-03-15 14:30:22"),
+            ("20240315-143022.jpg", "2024-03-15 14:30:22"),
+            ("2024.03.15_143022.jpg", "2024-03-15 14:30:22"),
+            ("Screenshot 2024-08-12 at 22.10.04.png", "2024-08-12 22:10:04"),
+            ("VID_20240315_235959.mp4", "2024-03-15 23:59:59")
+        ]
+        for (name, expected) in nameForms {
+            checker.equal(localFields(MetadataExtractor.captureDateFromFileName(name)),
+                          expected, "文件名里的日期（\(name)）")
+        }
+        // 反例：不能为了多认几种而把普通编号也认成时间
+        checker.equal(localFields(MetadataExtractor.captureDateFromFileName("IMG_20240315.jpg")),
+                      "nil", "只有日期、没有时分秒时不予采信")
+        checker.equal(localFields(MetadataExtractor.captureDateFromFileName("DSC_8912.jpg")),
+                      "nil", "普通编号不会被当成日期")
+        checker.equal(localFields(MetadataExtractor.captureDateFromFileName("IMG_20241315_143022.jpg")),
+                      "nil", "月份非法（13 月）时不予采信")
+
+        // ---------- 覆盖策略下的文件名互换 ----------
+        // 甲乙两个文件的**当前文件名**恰好是对方按模板渲染出来的名字（互换）。
+        // 这种计划在覆盖策略下会出事：执行器先把「目标位置已存在的文件」移进回收站，
+        // 可那正是后一条操作要搬走的源文件 —— 后一条执行时路径还在、内容已经换成了
+        // 前一条放进去的那份，于是交换根本没发生，还有一个文件被静默送进回收站。
+        //
+        // 保护措施是：目标位置上的文件若也在本批次处理范围内，就不再算「覆盖」，退回加序号。
+        checker.section("覆盖策略下的文件名互换")
+        let swapRoot = root.appendingPathComponent("swap-tree", isDirectory: true)
+        try? fm.createDirectory(at: swapRoot, withIntermediateDirectories: true)
+        // 两个时刻各自对应的模板渲染名（模板用已登记的组合变量 {yyyyMMdd_HHmmss}）
+        let earlier = "2021:06:01 10:00:00", earlierName = "20210601_100000"
+        let later = "2022:07:02 11:00:00", laterName = "20220702_110000"
+        var swapWritten = true
+        // 刻意把「早的图」写成「晚的名字」、把「晚的图」写成「早的名字」
+        for (exifDate, fileName) in [(earlier, laterName), (later, earlierName)] {
+            let url = swapRoot.appendingPathComponent("\(fileName).jpg")
+            guard let image = FixtureBuilder.patternImage(width: 240, height: 160, seed: 6060),
+                  FixtureBuilder.writeJPEG(image, to: url, exifDate: exifDate,
+                                           make: "Apple", model: "iPhone 13") else {
+                swapWritten = false
+                continue
+            }
+        }
+        checker.check(swapWritten, "互换素材写入完成（两个文件互为对方的目标名）")
+
+        var swapSettings = ScanSettings()
+        swapSettings.sourceFolders = [swapRoot.path]
+        swapSettings.useHashCache = false
+        swapSettings.minimumFileSize = 0
+        let swapScan = await MediaIndexer.index(settings: swapSettings,
+                                               cache: FingerprintCache(),
+                                               onProgress: { _ in })
+        checker.equal(swapScan.items.count, 2, "互换场景：两个文件都入库")
+
+        var swapRule = OrganizeRule()
+        // `isInPlace` 是派生属性：destinationRoot 留空即为原地整理，不建子目录
+        swapRule.transferMode = .move
+        swapRule.folderTemplate = ""
+        swapRule.renameTemplate = "{yyyyMMdd_HHmmss}"
+        swapRule.conflictPolicy = .overwrite              // 就是这个策略下才会出问题
+        var swapFilter = PlanFilter()
+        swapFilter.archiveFiles = true
+        swapFilter.cleanRedundantDuplicates = false
+        swapFilter.onlyRedundantDuplicates = false
+
+        let swapPlan = PlanBuilder.build(items: swapScan.items,
+                                        groups: [],
+                                        rule: swapRule,
+                                        filter: swapFilter,
+                                        excludedFromOrganizing: [])
+        checker.equal(swapPlan.operations.count, 2, "互换场景产生两条操作")
+        checker.check(swapPlan.operations.allSatisfy { !$0.overwritesExisting },
+                      "目标位置的文件本次还要搬走时，不再标成「覆盖」")
+        // 通用不变量：任何一条操作的落点，都不能落在本批次某个**源文件**上。
+        // 按 inode 比而不是字符串比 —— 路径里的符号链接会让同一份文件有两种写法，
+        // 字符串比在这种场景下恰好会通过，看着是绿的却什么都没验到。
+        func inodeNumber(_ path: String) -> String? {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                  let number = attributes[.systemFileNumber] as? NSNumber else { return nil }
+            return number.stringValue
+        }
+        let swapSourceInodes = Set(swapScan.items.compactMap { inodeNumber($0.path) })
+        let landedOnSource = swapPlan.operations
+            .compactMap { $0.destinationPath }
+            .compactMap { inodeNumber($0) }
+            .filter { swapSourceInodes.contains($0) }
+        checker.check(landedOnSource.isEmpty,
+                      "没有一条操作的落点落在本批次某个源文件上（实际 \(landedOnSource.count) 个）")
+
+        // 同一类问题的另一种后果，比互换更常见也更严重：**源目录路径带符号链接时**
+        // （`/tmp`、`/var`、用户自建的软链接都会），`item.path` 是被解析过的
+        // `/private/var/...`，而模板拼出来的目标路径用的是配置里的 `/var/...`。
+        // 只比字符串的话「已经在目标位置」永远判不出来 —— 接着在覆盖策略下，
+        // 执行器会把文件**自己**移进回收站。这里用一个「渲染结果就是当前文件名」的
+        // 规则来钉住它：一个操作都不该产生。
+        var sameNameRule = swapRule
+        sameNameRule.renameTemplate = "{orig}"
+        let inPlacePlan = PlanBuilder.build(items: swapScan.items,
+                                           groups: [],
+                                           rule: sameNameRule,
+                                           filter: swapFilter,
+                                           excludedFromOrganizing: [])
+        checker.equal(inPlacePlan.summary.alreadyPlacedCount, 2,
+                      "源目录路径带符号链接时，「已在目标位置」依然认得出来"
+                          + "（\(inPlacePlan.summary.alreadyPlacedCount)/2）")
+        checker.check(inPlacePlan.operations.allSatisfy { !$0.kind.isMutating },
+                      "已经在位的文件不产生任何移动 / 重命名操作")
 
         // ---------- 汇总 ----------
         print("\n" + String(repeating: "─", count: 64))

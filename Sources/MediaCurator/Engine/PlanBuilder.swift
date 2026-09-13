@@ -140,6 +140,24 @@ enum PlanBuilder {
         var reserved = Set<String>()
         var operations: [PlanOperation] = []
 
+        // 本批次要处理的文件**当前所在**的路径集合。
+        //
+        // 用来挡住一种会搬错文件的情况：覆盖策略下，如果某条操作的目标位置正是
+        // 本批次另一个文件现在的路径（典型是甲乙互换文件名这类环），执行器会先把这个
+        // 「同名文件」移进回收站 —— 可它其实是后面那条操作要搬走的源文件。
+        // 于是后一条执行时路径还在、内容已经换成了前一条放进去的那份：
+        // 结果是其中一个文件被静默送进回收站、交换根本没发生。
+        // 这种情形下退回「加序号」——两份都保住，只是名字不再互换。
+        //
+        // 同时记一份**文件同一性**：字符串可能因为符号链接而拼法不同（见 `pointsToSameFile`）。
+        let claimedSourcePaths = Set(prepared.map { $0.item.path })
+        let claimedSourceIdentities = Set(prepared.compactMap { fileIdentity(of: $0.item.path) })
+        func isClaimedByBatch(_ path: String) -> Bool {
+            if claimedSourcePaths.contains(path) { return true }
+            guard let identity = fileIdentity(of: path) else { return false }
+            return claimedSourceIdentities.contains(identity)
+        }
+
         for entry in prepared {
             let item = entry.item
             let group = entry.redundantGroup
@@ -189,7 +207,8 @@ enum PlanBuilder {
             var desired = targetDir + "/" + fileName
 
             // ---------- 判断结果 ----------
-            if desired == item.path {
+            // 用**文件同一性**而不是字符串比较，见 `pointsToSameFile` 的说明。
+            if pointsToSameFile(desired, item.path) {
                 // 已经在它该在的位置：不产生任何操作
                 operations.append(PlanOperation(
                     kind: .alreadyPlaced,
@@ -233,23 +252,32 @@ enum PlanBuilder {
                     reserved.insert(desired)
                     continue
                 case .overwrite:
-                    if onDisk && !inBatch {
+                    if onDisk && !inBatch && !isClaimedByBatch(desired) {
                         // 覆盖磁盘上已存在的同名文件。执行时先把原文件移入回收站再落位，
                         // 所以文案不能写成「不可恢复」。
                         overwrites = true
                         reasonSuffix = "（同名文件将先移入回收站，再落位）"
                     } else {
-                        // 与本批次内其它文件重名：两个都要落位，互相覆盖没有意义，退回加序号
+                        // 两种情况都退回加序号：
+                        // 1. 与本批次内其它文件的目标重名 —— 两个都要落位，互相覆盖没有意义；
+                        // 2. 目标位置上那个文件本身也在本批次里（见 `claimedSourcePaths` 的说明）
+                        //    —— 先覆盖掉它会让后一条操作搬错文件。
                         finalPath = numberedAlternative(desired, reserved: reserved)
-                        reasonSuffix = "（与本次计划内其他文件重名，自动加序号）"
+                        reasonSuffix = inBatch
+                            ? "（与本次计划内其他文件重名，自动加序号）"
+                            : "（目标位置的文件本次也要移动，自动加序号）"
                     }
                 }
             }
 
             reserved.insert(finalPath)
 
-            let sameDirectory = (finalPath as NSString).deletingLastPathComponent
-                == (item.path as NSString).deletingLastPathComponent
+            // 同目录判定也要按同一性来：两边拼法不同时（见 `pointsToSameFile`），
+            // 字符串比较会把「同目录改名」误判成「跨目录移动」，摘要里
+            // 「移动 / 重命名」两个数字就跟着错。
+            let sameDirectory = pointsToSameDirectory(
+                (finalPath as NSString).deletingLastPathComponent,
+                (item.path as NSString).deletingLastPathComponent)
             // 复制模式下同目录改名也走复制，保持与用户所选模式语义一致
             let kind: OperationKind = (rule.transferMode == .copy)
                 ? .copy
@@ -441,6 +469,36 @@ enum PlanBuilder {
         if !extra.isEmpty { parts.append(extra) }
 
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 路径同一性
+
+    /// 文件的唯一标识：`设备号:inode`。取不到（文件不存在 / 无权限）时返回 nil。
+    private static func fileIdentity(of path: String) -> String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let inode = attributes[.systemFileNumber] as? NSNumber,
+              let device = attributes[.systemNumber] as? NSNumber else { return nil }
+        return "\(device):\(inode)"
+    }
+
+    /// 两个路径是否指向同一个文件。
+    ///
+    /// 不能只比字符串：`item.path` 来自文件系统枚举（**符号链接已被解析**，
+    /// 得到 `/private/var/...`），而模板拼出来的 `desired` 用的是用户配置里的源目录
+    /// （可能还是 `/var/...`）。同一份文件两种拼法，字符串必然不等 ——
+    /// 于是「已经在目标位置」判断失效，继续往下走还会撞上「目标已存在」：
+    /// 在覆盖策略下，执行器会先把**这个文件自己**移进回收站，再移动一个已经不在原处的源，
+    /// 结果文件进了回收站、计划报告失败。`/tmp`、`/var`、`/etc` 以及任何用户自建的
+    /// 软链接都属于这种情况（自检的临时目录正在 `/var/folders` 下，所以这一条一直没被覆盖到）。
+    private static func pointsToSameFile(_ lhs: String, _ rhs: String) -> Bool {
+        if PathTools.normalized(lhs) == PathTools.normalized(rhs) { return true }
+        guard let a = fileIdentity(of: lhs), let b = fileIdentity(of: rhs) else { return false }
+        return a == b
+    }
+
+    /// 两个目录是否为同一个目录（同样要考虑符号链接）。
+    private static func pointsToSameDirectory(_ lhs: String, _ rhs: String) -> Bool {
+        pointsToSameFile(lhs, rhs)
     }
 
     // MARK: - 风险提示

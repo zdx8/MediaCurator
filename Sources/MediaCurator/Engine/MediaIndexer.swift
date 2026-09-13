@@ -96,7 +96,11 @@ enum MediaIndexer {
     ]
 
     private static func makeEnumerator(rootURL: URL, settings: ScanSettings) -> FileManager.DirectoryEnumerator? {
-        var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
+        // 这里原本写成 `var options: … = [.skipsPackageDescendants]`，然后下面再按设置
+        // 插一次同一个选项 —— 集合插入是幂等的，于是 `skipPackages` 这个设置**从来没有生效过**：
+        // 包目录永远被跳过。界面上那个开关因此成了摆设（而且当时还只有「跳过隐藏文件与包目录」
+        // 一个标签、绑的是 `skipHidden`，连个能关掉包目录跳过的入口都没有）。
+        var options: FileManager.DirectoryEnumerationOptions = []
         if settings.skipHidden { options.insert(.skipsHiddenFiles) }
         if settings.skipPackages { options.insert(.skipsPackageDescendants) }
         return FileManager.default.enumerator(at: rootURL,
@@ -258,13 +262,17 @@ enum MediaIndexer {
                 let meta = MetadataExtractor.readImage(url: item.url, settings: settings)
                 apply(meta, to: &item)
 
-                let signature = PerceptualHash.signature(for: item.url)
-                if let signature {
-                    item.perceptualHash = signature.perceptualHash
-                    item.colorSignature = signature.colorSignature
-                } else if item.width > 0 {
-                    // 尺寸读到了但像素解不开，多半是相机 RAW，系统无解码器
-                    item.error = item.error ?? "无图像解码器（可能是 RAW 格式）"
+                // 已经判定解不开的文件（多半是没有解码器的相机 RAW）不再试一次 ImageIO：
+                // `PerceptualHash` 会重新打开文件、解析容器，几万张 RAW 时这笔开销很实在，
+                // 而结果必然是 nil。错误文案照旧补上，界面上的解释不变。
+                if item.decodable {
+                    if let signature = PerceptualHash.signature(for: item.url) {
+                        item.perceptualHash = signature.perceptualHash
+                        item.colorSignature = signature.colorSignature
+                    } else {
+                        // 尺寸读到了但像素解不开
+                        item.error = item.error ?? "无图像解码器（可能是 RAW 格式）"
+                    }
                 }
 
                 item.quickSignature = ContentHasher.quickSignature(url: item.url, fileSize: item.fileSize)

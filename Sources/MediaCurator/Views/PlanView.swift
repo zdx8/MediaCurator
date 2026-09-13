@@ -119,10 +119,12 @@ struct PlanView: View {
                     .font(.system(size: 12.5, weight: .semibold))
                 Spacer()
             }
-            ForEach(state.planWarnings, id: \.self) { warning in
+            // 用下标当 id：这些提示是人写的整句，将来若有两处追加同一句话，
+            // `id: \.self` 就会给出重复 id（SwiftUI 会报 duplicate id 并可能错位显示）。
+            ForEach(state.planWarnings.indices, id: \.self) { index in
                 HStack(alignment: .top, spacing: 7) {
                     Circle().fill(Palette.caution).frame(width: 4.5, height: 4.5).padding(.top, 6)
-                    Text(warning)
+                    Text(state.planWarnings[index])
                         .font(.system(size: 11.5))
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
@@ -140,6 +142,7 @@ struct PlanView: View {
     private func resultBox(_ report: ExecutionReport) -> some View {
         let ok = report.failed == 0
         let tint = ok ? Palette.positive : Palette.caution
+        let messages = Array(report.messages.prefix(6))
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -159,10 +162,12 @@ struct PlanView: View {
                 }
                 .controlSize(.small)
             }
-            ForEach(report.messages.prefix(6), id: \.self) { message in
+            // 用下标而不是 `id: \.self`：执行报告里的消息可能重复（同一个失败原因
+            // 出现在多个文件上），一旦重复，SwiftUI 会拿到重复 id 并可能显示错乱。
+            ForEach(messages.indices, id: \.self) { index in
                 HStack(alignment: .top, spacing: 7) {
                     Circle().fill(tint).frame(width: 4.5, height: 4.5).padding(.top, 6)
-                    Text(message)
+                    Text(messages[index])
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -495,11 +500,12 @@ struct ConfirmationSheet: View {
             }
 
             if !state.planWarnings.isEmpty {
+                let shownWarnings = Array(state.planWarnings.prefix(4))
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(state.planWarnings.prefix(4), id: \.self) { warning in
+                    ForEach(shownWarnings.indices, id: \.self) { index in
                         HStack(alignment: .top, spacing: 6) {
                             Circle().fill(Palette.caution).frame(width: 4, height: 4).padding(.top, 5)
-                            Text(warning)
+                            Text(shownWarnings[index])
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)

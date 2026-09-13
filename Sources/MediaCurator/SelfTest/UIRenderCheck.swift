@@ -48,6 +48,12 @@ enum UIRenderCheck {
         /// 画面里出现过的色相桶数（12 等分）。用来判定「照片有没有真的画上去」——
         /// 空占位符也有墨迹，光看墨迹比例区分不出「画了内容」和「画了照片」。
         var hueBucketCount: Int = 0
+        /// 整幅高度的左右边缘墨迹（`leadingEdgeInk` 只量顶部那条带）。
+        ///
+        /// 滚动区**内部的**内容一旦比卡片宽，结果是被 ScrollView 裁在边界上，
+        /// 而不是画到画布外面 —— 顶部那条带量不到它，只能整幅量。
+        var fullLeadingEdgeInk: Double = 0
+        var fullTrailingEdgeInk: Double = 0
     }
 
     /// 把主色解析成具体分量。显式指定 sRGB —— SwiftUI 的 `Color(red:green:blue:)`
@@ -349,6 +355,41 @@ enum UIRenderCheck {
             checker.equal(node.directChildCounts[probeRoot], 2, "来源根的直接下级是 2 个")
             checker.equal(node.directChildCounts[midPath], 1, "2023 的直接下级是 1 个")
             checker.equal(node.directChildCounts[sibling], nil, "叶子目录没有下级计数")
+
+            // 侧栏目录树的**默认折叠必须真的画出来**。渲染两张（默认 vs 全展开），
+            // 指纹相同就说明默认折叠没接上 —— 目录树少几行、多几行，人看截图分辨不出来，
+            // 而它正是最容易「代码写了但没生效」的地方。
+            // 必须用探针数据渲染：自检素材是平铺的，没有可折叠的层级，两张会必然相同。
+            let treeSize = CGSize(width: 240, height: 460)
+            if let treeDefault = await render(name: "目录树-默认", size: treeSize, content: {
+                AnyView(SourceFolderTreeView(state: state))
+            }), let treeExpanded = await render(name: "目录树-全展开", size: treeSize, content: {
+                AnyView(SourceFolderTreeView(state: state, injectedCollapsed: []))
+            }) {
+                checker.check(treeDefault.digest != treeExpanded.digest,
+                              "侧栏来源目录树的默认折叠真的生效（默认态与全展开态渲染不同）")
+                checker.check(treeDefault.inkRatio > 0.01,
+                              String(format: "侧栏目录树有实际绘制内容（墨迹 %.4f）",
+                                     treeDefault.inkRatio))
+            } else {
+                checker.check(false, "侧栏来源目录树渲染失败")
+            }
+
+            // 侧栏最窄可以拖到 214pt，目录树在那里不能把内容挤到画布外 ——
+            // SwiftUI 对「放不下」只会默默压缩或越界绘制，不报错也不崩溃，
+            // 界面上就是某个名字被裁掉半截。用边缘墨迹判：页面有留白，最边上几列应当是背景。
+            if let narrowTree = await render(name: "目录树-最窄",
+                                             size: CGSize(width: 214, height: 460),
+                                             content: {
+                AnyView(SourceFolderTreeView(state: state))
+            }) {
+                print(String(format: "  · 最窄侧栏目录树的边缘墨迹：左 %.4f / 右 %.4f",
+                             narrowTree.leadingEdgeInk, narrowTree.trailingEdgeInk))
+                checker.check(narrowTree.leadingEdgeInk < 0.02 && narrowTree.trailingEdgeInk < 0.02,
+                              "214pt 宽的侧栏里目录树没有越界绘制")
+            } else {
+                checker.check(false, "最窄宽度下的目录树渲染失败")
+            }
 
             // 首次进入的默认折叠：只露到第一层。
             // 层级深 / 子目录多的时候，默认全展开会把目录树铺满整屏、把网格挤下去 ——
@@ -662,6 +703,29 @@ enum UIRenderCheck {
                           String(format: "缩略图缓存命中（第二次耗时 %.4f 秒）", elapsed))
         }
 
+        // ---------- 「检查重复媒体」开关 ----------
+        // 关掉它应该只跳过比对：文件照样入库、「所有媒体」页照常有内容，
+        // 而分组与摘要必须一并清零 —— 每次扫描的 `MediaItem.id` 都是新的，
+        // 留着上一轮的分组只会得到一堆点不开的卡片。
+        // 放在所有断言的最后：重新扫描会让全部 id 换新，之前的断言都不能再用。
+        print("\n▸ 检查重复媒体的开关")
+        let savedCheckDuplicates = state.settings.checkDuplicates
+        let itemsBefore = state.items.count
+        state.settings.checkDuplicates = false
+        await state.performScan()
+        checker.equal(state.items.count, itemsBefore,
+                      "关掉查重后文件照样全部入库（\(state.items.count) 个）")
+        checker.check(state.groups.isEmpty, "关掉查重后不产生任何分组")
+        checker.equal(state.dedupSummary.totalGroupCount, 0, "关掉查重后摘要里的组数归零")
+        checker.equal(state.dedupSummary.reclaimableBytes, 0, "关掉查重后可释放空间归零")
+        checker.check(!state.visibleMediaItems.isEmpty, "关掉查重后「所有媒体」页仍有内容")
+
+        state.settings.checkDuplicates = savedCheckDuplicates
+        await state.performScan()
+        checker.check(!state.groups.isEmpty,
+                      "重新打开查重并再扫一次后分组恢复（\(state.groups.count) 组）")
+        checker.check(state.dedupSummary.reclaimableBytes > 0, "恢复查重后可释放空间重新统计出来")
+
         print("\n" + String(repeating: "─", count: 64))
         print("界面自检结论：\(checker.failed == 0 ? "全部通过（\(checker.passed) 项）" : "\(checker.passed) 项通过，\(checker.failed) 项失败")")
         if let shotsDirectory {
@@ -838,22 +902,17 @@ enum UIRenderCheck {
 
         // 「所有媒体」页的勾选态：官网需要能看出「勾上要清理的文件」是什么样。
         // 只勾前面几个，保留大片未勾选的格子 —— 全勾会让人误以为这页就是「一键全清」。
+        //
+        // 带上侧栏一起出图：来源目录树现在挂在侧栏上，不带侧栏就看不到这个能力，
+        // 而它恰恰是这一页附近最需要展示的东西。尺寸与首屏总览保持一致。
         state.page = .allMedia
         let pickedForShot = state.visibleMediaItems.prefix(4).map { $0.id }
         state.setCleanupSelection(true, itemIDs: Array(pickedForShot))
-        let allMediaShot = await save("all-media-selected", size: canvas) {
-            AnyView(AllMediaView(state: state))
-        }
-
-        // 目录树的「默认折叠」必须真的画出来。这里并排渲染默认态与全展开态，
-        // 两者指纹相同就说明默认折叠没接上 —— 而目录树少几行、多几行，
-        // 人看截图分辨不出来，这正是最容易「代码写了但没生效」的地方。
-        // 这两张只用于比对，不进官网（`make_site_shots.sh` 只 emit 指定的那几张）。
-        let expandedShot = await save("all-media-expanded", size: canvas) {
-            AnyView(AllMediaView(state: state, injectedCollapsed: []))
-        }
-        if let a = allMediaShot, let b = expandedShot, a.digest == b.digest {
-            failures.append("「所有媒体」页的默认折叠没有生效（收起与展开渲染结果完全相同）")
+        let allMediaShot = await save("all-media-selected", size: overview) {
+            AnyView(HStack(spacing: 0) {
+                SidebarView(state: state)
+                AllMediaView(state: state)
+            })
         }
 
         // 官网截图的验收标准只有一条：**画面里得真有照片**。
@@ -950,6 +1009,10 @@ enum UIRenderCheck {
         print(String(repeating: "─", count: 64))
         JournalStore.overrideDirectory = fixtureRoot.appendingPathComponent("journals",
                                                                             isDirectory: true)
+        // 自检会真的扫描并设置好源目录，若落进真实的 UserDefaults，
+        // 用户下次打开就会发现自己的扫描目录被换成了临时素材目录。
+        AppState.suppressPreferenceWrites = true
+        defer { AppState.suppressPreferenceWrites = false }
 
         let state = AppState()
         state.settings.sourceFolders = [fixtureRoot.path]
@@ -978,10 +1041,13 @@ enum UIRenderCheck {
                                  content: {
             AnyView(Color.red.frame(width: 900, height: 120))
         }) {
-            print(String(format: "  · 越界对照：边缘墨迹 %.5f / %.5f",
-                         overflow.leadingEdgeInk, overflow.trailingEdgeInk))
-            if overflow.trailingEdgeInk > 0.0005 {
-                print("  ✓ 边缘检测有效（构造的越界画面被抓到）")
+            print(String(format: "  · 越界对照：顶部带 %.5f / %.5f，整幅 %.5f / %.5f",
+                         overflow.leadingEdgeInk, overflow.trailingEdgeInk,
+                         overflow.fullLeadingEdgeInk, overflow.fullTrailingEdgeInk))
+            // 两条都要自证：整幅那个判据是「页面级」检查唯一的依据，
+            // 它要是永远返回 0，下面的「没有顶到边界」就等于什么都没验。
+            if overflow.trailingEdgeInk > 0.0005 && overflow.fullTrailingEdgeInk > 0.0005 {
+                print("  ✓ 边缘检测有效（顶部带与整幅都抓到了构造的越界画面）")
             } else {
                 print("  ✗ 边缘检测失效：构造的越界画面没被抓到，下面的「无越界」结论不可信")
                 failures += 1
@@ -1017,6 +1083,47 @@ enum UIRenderCheck {
             state.resetKeepRecommendations()
         }
         state.groups[0].disposition = .bySelection
+
+        // ---------- 页面级：内容不能顶到裁剪边界 ----------
+        //
+        // 选项区在滚动区域**内部**。某一行一旦比卡片宽，SwiftUI 不报任何错，
+        // 结果是被 ScrollView 裁在边界上 —— 画布外的边缘检测（只量顶部那条带）看不见它，
+        // 而在真实窗口里就表现为「右边有个控件被切了一半」。
+        //
+        // 判据取**相对值**：竖直滚动条就贴着右边缘，绝对墨迹会被它抬高，
+        // 只有比同页宽画布多出来的那部分才是真被裁掉的内容 —— 宽画布下按定义不会越界。
+        print("\n▸ 窄画布下的选项区（整幅边缘墨迹，与 1400 宽同页对比）")
+        let pageCases: [(name: String, view: (AppState) -> AnyView)] = [
+            ("扫描页", { AnyView(ScanView(state: $0)) }),
+            ("整理规则页", { AnyView(OrganizeView(state: $0)) })
+        ]
+        for page in pageCases {
+            guard let wide = await render(name: "wide-\(page.name)",
+                                          size: CGSize(width: 1400, height: 1100),
+                                          content: { page.view(state) }) else {
+                print("  ✗ \(page.name)：宽画布渲染失败")
+                failures += 1
+                continue
+            }
+            // 844 = 最小窗口 1180 − 侧栏 260 − 页面留白 44 − 卡片内边距 32
+            for narrowWidth in [844.0, 920.0] {
+                guard let narrow = await render(name: "narrow-\(page.name)-\(Int(narrowWidth))",
+                                                size: CGSize(width: narrowWidth, height: 1100),
+                                                content: { page.view(state) }) else {
+                    print("  ✗ \(page.name) @\(Int(narrowWidth))：渲染失败")
+                    failures += 1
+                    continue
+                }
+                let extraLeading = narrow.fullLeadingEdgeInk - wide.fullLeadingEdgeInk
+                let extraTrailing = narrow.fullTrailingEdgeInk - wide.fullTrailingEdgeInk
+                let overflow = max(extraLeading, extraTrailing) > 0.002
+                print(String(format: "  %@ %@ @%.0f：边缘 %.5f / %.5f（比宽画布多 %.5f / %.5f）",
+                             overflow ? "✗ 顶到边界" : "✓", page.name, narrowWidth,
+                             narrow.fullLeadingEdgeInk, narrow.fullTrailingEdgeInk,
+                             extraLeading, extraTrailing))
+                if overflow { failures += 1 }
+            }
+        }
 
         print(String(repeating: "─", count: 64))
         print(failures == 0
@@ -1162,11 +1269,11 @@ enum UIRenderCheck {
         // 就说明有控件被挤出了画布 —— SwiftUI 对这种越界不报任何错，只能靠像素判。
         // 只看顶部这一段是因为再往下是滚动区，滚动条就贴着右边缘，会误报。
         // `NSBitmapImageRep.colorAt` 的原点在左上，所以 y 从 0 开始就是画面顶部。
-        func edgeInk() -> (leading: Double, trailing: Double) {
+        func edgeInk(band: Int) -> (leading: Double, trailing: Double) {
             // 位图是按显示器缩放比渲染的（外接屏 1x、内建屏 2x），
             // 所以这里把「点」换算成像素再取样，否则检测范围会随屏幕而变。
             let scale = size.width > 0 ? Double(width) / Double(size.width) : 1
-            let band = min(Int(140 * scale), height)
+            let band = min(band, height)
             let columns = min(max(1, Int(4 * scale)), max(1, width / 4))
             var leading = 0
             var trailing = 0
@@ -1188,7 +1295,9 @@ enum UIRenderCheck {
             guard counted > 0 else { return (0, 0) }
             return (Double(leading) / Double(counted), Double(trailing) / Double(counted))
         }
-        let edges = edgeInk()
+        let topScale = size.width > 0 ? Double(width) / Double(size.width) : 1
+        let edges = edgeInk(band: Int(140 * topScale))
+        let fullEdges = edgeInk(band: height)
 
         return RenderResult(name: name,
                             width: width,
@@ -1199,7 +1308,9 @@ enum UIRenderCheck {
                             accentLikeCount: accentLike,
                             leadingEdgeInk: edges.leading,
                             trailingEdgeInk: edges.trailing,
-                            hueBucketCount: hueBuckets.count)
+                            hueBucketCount: hueBuckets.count,
+                            fullLeadingEdgeInk: fullEdges.leading,
+                            fullTrailingEdgeInk: fullEdges.trailing)
     }
 
     /// 把颜色映射到 12 个色相桶之一；灰色与接近全黑 / 全白的不计入（返回 nil）。

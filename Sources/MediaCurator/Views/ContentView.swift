@@ -67,6 +67,12 @@ struct SidebarView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
+
+                // 来源目录紧跟导航项。放在侧栏而不是「所有媒体」页的内容区：
+                // 它管的是**整轮归档**要不要动某些目录，是全局设置而非某一页的筛选，
+                // 挂在侧栏上任何页面都看得见、随时能改，内容区也让给了缩略图网格。
+                Divider().padding(.horizontal, 14)
+                SourceFolderTreeView(state: state)
             }
 
             Spacer(minLength: 0)

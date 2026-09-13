@@ -56,7 +56,7 @@ emit() { # <源文件（不含扩展名）> <目标文件名> <宽> <高> [png|j
 emit "overview-light"        "overview-light.png"        1800 1138
 emit "overview-dark"         "overview-dark.png"         1400  885
 emit "scan"                  "scan.png"                  1400  925
-emit "all-media-selected"    "all-media-selected.png"    1400  925
+emit "all-media-selected"    "all-media-selected.png"    1400  885
 emit "duplicates"            "duplicates.png"            1400  925
 emit "duplicates-keep-whole" "duplicates-keep-whole.png" 1400  925
 emit "duplicates-discard-all" "duplicates-discard-all.png" 1400 925

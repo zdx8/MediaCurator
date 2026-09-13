@@ -663,6 +663,10 @@ final class AppState: ObservableObject {
         planWarnings = []
         folderCounts = [:]
         cleanupSelection.removeAll()
+        // 「重复项」页的分段筛选也要复位。它是常驻状态，只在那一页的控件里被写：
+        // 上一轮选了「相似视频」再重扫，若新结果里没有相似视频组，
+        // 列表会被筛成空的，而顶部摘要仍按全量显示 —— 又变成「计数对不上」。
+        duplicateFilter = nil
 
         scanTask = Task { [weak self] in
             await self?.performScan()
@@ -700,14 +704,38 @@ final class AppState: ObservableObject {
         // 换了一批文件，旧的勾选 id 全部失效 —— 留着只会让「已勾选 N 个」
         // 与网格里能看到的勾选数对不上。
         cleanupSelection.removeAll()
+        // 同理，上一轮的分段筛选也要复位（见 `startScan` 里的说明）。
+        // 这里再来一次是因为 `performScan` 也会被自检与「重新扫描」直接调用。
+        duplicateFilter = nil
 
-        await recomputeDuplicates()
+        if settings.checkDuplicates {
+            await recomputeDuplicates()
+        } else {
+            // 关掉查重时必须把分组清空。每次扫描产生的 `MediaItem.id` 都是全新的，
+            // 上一次的分组里全是失效 id —— 留着就会让「重复项」页显示一堆点不开的卡片，
+            // 计数也还停在上一轮。
+            groups = []                // 摘要随 `groups` 的观察器一并归零
+            progress.phase = .finished
+        }
+
+        // 取消扫描时 `recomputeDuplicates` 会把阶段改写成「分析中 → 已完成」，
+        // 盖掉上面设的 `.cancelled`。结果就成了：提示写着「扫描已取消」，
+        // 而进度卡消失、摘要照常出现，看起来像正常扫完了。所以在这里补回来。
+        if outcome.wasCancelled {
+            progress.phase = .cancelled
+        }
 
         if !outcome.wasCancelled {
-            notice = AppNotice(level: .success, title: "扫描完成",
-                               message: "共处理 \(outcome.items.count) 个文件，发现 "
-                                   + "\(dedupSummary.totalGroupCount) 组重复 / 相似，"
-                                   + "可释放 \(dedupSummary.reclaimableLabel)。")
+            let message: String
+            if settings.checkDuplicates {
+                message = "共处理 \(outcome.items.count) 个文件，发现 "
+                    + "\(dedupSummary.totalGroupCount) 组重复 / 相似，"
+                    + "可释放 \(dedupSummary.reclaimableLabel)。"
+            } else {
+                message = "共处理 \(outcome.items.count) 个文件；本次未查重，"
+                    + "可以在「所有媒体」页浏览，或回来打开「检查重复媒体」再扫一次。"
+            }
+            notice = AppNotice(level: .success, title: "扫描完成", message: message)
         }
     }
 
@@ -864,6 +892,10 @@ final class AppState: ObservableObject {
         planSummary = built.summary
         planWarnings = built.warnings
         folderCounts = built.folderCounts
+        // 新计划要盖掉上一次的执行结果。不清的话，「执行计划」页会在一个**尚未执行**
+        // 的新计划上方继续挂着「上次执行：成功 12 项」，很容易被读成这份计划已经跑过了。
+        // 撤销路径（`undo`）自己也会清，那是另一回事。
+        lastExecution = nil
 
         if built.operations.isEmpty {
             notice = AppNotice(level: .info, title: "没有需要处理的内容",
