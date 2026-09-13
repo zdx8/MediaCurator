@@ -13,7 +13,9 @@ struct MediaPreviewOverlay: View {
     @Binding var index: Int
     /// 组内被标记保留的成员（可多选）
     let keepIDs: Set<UUID>
-    let keepWhole: Bool
+    /// 本组的整组决定。非「按勾选」时逐张勾选无效，工具条要换成状态说明 ——
+    /// 之前这里直接把按钮藏掉，用户只看得出「按钮没了」，看不出为什么。
+    var disposition: GroupDisposition = .bySelection
     let onToggleKeep: (UUID) -> Void
     let onReveal: (String) -> Void
     let onOpen: (String) -> Void
@@ -45,6 +47,22 @@ struct MediaPreviewOverlay: View {
 
     /// 当前这张是本组唯一的保留项 —— 不允许取消，否则整组都会变成待清理
     private var isLastKeep: Bool { isCurrentKept && keepIDs.count <= 1 }
+
+    private var dispositionSymbol: String {
+        disposition == .keepAll ? "checkmark.shield.fill" : "trash.fill"
+    }
+
+    private var dispositionSummary: String {
+        disposition == .keepAll ? "本组已设为保留整组" : "本组已设为都不保留"
+    }
+
+    private var dispositionHelp: String {
+        disposition == .keepAll
+            ? "这几张都要留下：本组不产生任何清理操作，但仍会按整理规则归档。"
+              + "逐张勾选在整组决定下无效，可在分组卡片上取消这一决定。"
+            : "这一组一张都不要：\(items.count) 个文件会全部移入系统回收站"
+              + "（可在操作日志里撤销找回）。逐张勾选在整组决定下无效。"
+    }
 
     var body: some View {
         ZStack {
@@ -110,7 +128,7 @@ struct MediaPreviewOverlay: View {
     @ViewBuilder
     private var quickActions: some View {
         if let item {
-            if !keepWhole {
+            if disposition == .bySelection {
                 // 支持多选，所以这里是「切换」而不是「设为唯一保留」
                 Button {
                     onToggleKeep(item.id)
@@ -128,6 +146,16 @@ struct MediaPreviewOverlay: View {
                          ? "本组至少需要保留一份，先勾选其它成员再取消这一份"
                          : "取消保留，这张将进入待清理列表")
                       : "标记为保留（可多选）")
+            } else {
+                // 整组决定生效：说明为什么这里没有勾选按钮，
+                // 以及当前这张在这一决定下会有什么下场。
+                Label(dispositionSummary, systemImage: dispositionSymbol)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.14)))
+                    .help(dispositionHelp)
             }
 
             Button {

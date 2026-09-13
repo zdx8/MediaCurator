@@ -20,8 +20,11 @@ struct DuplicatesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // 页头右侧只放**一个**主动作。页头右侧分到的是标题与副标题剩下的宽度
+            // （最小窗口下约 420pt），按钮一多就必然被压缩 —— 这是「生成清理计划
+            // 显示不完全」的成因。其余控件统一走下面整宽的 `toolRow`。
             PageHeader(title: "重复项", subtitle: "逐组确认保留哪一份；默认保留分辨率最高、时间最可信的那个", step: 2) {
-                AnyView(headerActions)
+                AnyView(planButton)
             }
             .padding(.horizontal, 22)
             .padding(.top, 16)
@@ -36,6 +39,10 @@ struct DuplicatesView: View {
                            actionTitle: state.items.isEmpty ? "去扫描" : nil,
                            action: state.items.isEmpty ? { state.page = .scan } : nil)
             } else {
+                toolRow
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 12)
+
                 summaryBar
                     .padding(.horizontal, 22)
                     .padding(.bottom, 12)
@@ -54,9 +61,8 @@ struct DuplicatesView: View {
                                         .firstIndex { $0.id == itemID } ?? 0
                                     previewGroupID = group.id
                                 },
-                                onToggleKeepWhole: {
-                                    state.setKeepWholeGroup(groupID: group.id,
-                                                            value: !group.keepWholeGroup)
+                                onSetDisposition: { disposition in
+                                    state.toggleDisposition(groupID: group.id, disposition: disposition)
                                 },
                                 onReveal: { state.revealInFinder($0) },
                                 onOpen: { state.openInDefaultApp($0) })
@@ -84,7 +90,7 @@ struct DuplicatesView: View {
                     items: resolvedMembers(group),
                     index: $previewIndex,
                     keepIDs: group.keepIDs,
-                    keepWhole: group.keepWholeGroup,
+                    disposition: group.disposition,
                     onToggleKeep: { state.toggleKeep(groupID: group.id, memberID: $0) },
                     onReveal: { state.revealInFinder($0) },
                     onOpen: { state.openInDefaultApp($0) },
@@ -102,29 +108,29 @@ struct DuplicatesView: View {
 
     // MARK: - 顶部操作
 
-    /// 窄窗口下操作拆成两行。
+    /// 筛选、整组决定的计数，以及两个次要动作。
     ///
-    /// 原来是一整条 HStack：分段控件（固定 340）+ 汇总标签 + 两个按钮。
-    /// 总宽度超过可用宽度时 SwiftUI 会去压其中的子视图，最右边的
-    /// 「生成清理计划」被压到只显示半截 —— 而它是这一页最主要的动作。
-    /// 这里用 `ViewThatFits` 让它在放不下时整体换行，按钮再加 `fixedSize`
-    /// 声明「我不接受压缩」，宁可换行也不裁字。
-    private var headerActions: some View {
+    /// 这一行占满整页宽度，所以「放不放得下」是可以算清的：
+    /// 分段控件 340 + 两个状态标签最多约 210 + 两个按钮约 250 + 间距 ≈ 840，
+    /// 比最小窗口下内容区的 876 略有余量。`ViewThatFits` 只是兜底 ——
+    /// 万一将来再加控件，它会整体换行，而不是把某个按钮压到只剩半截。
+    private var toolRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 filterPicker.frame(width: 340)
-                wholeGroupChip
+                statusChips
+                Spacer(minLength: 8)
                 resetButton
-                planButton
+                archiveOnlyButton
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     filterPicker.frame(width: 300)
-                    wholeGroupChip
+                    statusChips
                 }
                 HStack(spacing: 10) {
                     resetButton
-                    planButton
+                    archiveOnlyButton
                 }
             }
         }
@@ -143,12 +149,27 @@ struct DuplicatesView: View {
         .labelsHidden()
     }
 
+    /// 整组决定的计数。
+    ///
+    /// 数字直接来自 `dedupSummary`，而摘要在 `groups` 一变就重算（见 `AppState.groups`
+    /// 的观察器）—— 所以不会出现「卡片上明明写着都不保留、这里却没算上」这种自相矛盾。
+    /// 之前这里是读一份手动维护的缓存，有一条路径（执行计划后剔除失效分组）忘了刷新，
+    /// 计数就会和卡片对不上。
     @ViewBuilder
-    private var wholeGroupChip: some View {
-        if state.dedupSummary.keptWholeGroupCount > 0 {
-            TagChip(text: "整组保留 \(state.dedupSummary.keptWholeGroupCount) 组",
-                    tint: Palette.positive, filled: false)
-                .fixedSize()
+    private var statusChips: some View {
+        HStack(spacing: 6) {
+            if state.dedupSummary.keptWholeGroupCount > 0 {
+                TagChip(text: "保留整组 \(state.dedupSummary.keptWholeGroupCount) 组",
+                        tint: Palette.positive, filled: false)
+                    .fixedSize()
+                    .help("这些组不产生任何清理操作，文件仍会按整理规则归档")
+            }
+            if state.dedupSummary.discardedWholeGroupCount > 0 {
+                TagChip(text: "都不保留 \(state.dedupSummary.discardedWholeGroupCount) 组",
+                        tint: Palette.danger, filled: false)
+                    .fixedSize()
+                    .help("这些组的所有文件都会移入系统回收站，可通过操作日志撤销找回")
+            }
         }
     }
 
@@ -157,7 +178,24 @@ struct DuplicatesView: View {
             .controlSize(.regular)
             .fixedSize()
             .disabled(state.groups.isEmpty)
-            .help("清除所有人工决定（改选的保留项与整组保留），恢复成程序推荐结果")
+            .help("清除所有人工决定（改选的保留项与整组决定），恢复成程序推荐结果")
+    }
+
+    /// 跳过重复项，只按整理规则归档。
+    ///
+    /// 与主按钮互补：主按钮走纯清理模式（只清冗余副本、不归档），
+    /// 这个按钮则完全不碰重复项，只把目录结构整理好。
+    /// 之前重复项页只有前者，不想处理重复副本的用户会被迫先离开这一页。
+    private var archiveOnlyButton: some View {
+        Button {
+            state.generateArchiveOnlyPlan()
+        } label: {
+            Label("跳过重复项，只做归档", systemImage: "folder.badge.gearshape")
+        }
+        .controlSize(.regular)
+        .fixedSize()
+        .disabled(state.items.isEmpty)
+        .help("不清理任何重复副本，只按「整理规则」页的模板把文件归档到目标目录。")
     }
 
     private var planButton: some View {
@@ -172,6 +210,8 @@ struct DuplicatesView: View {
         .controlSize(.regular)
         .fixedSize()
         .disabled(state.groups.isEmpty)
+        .help("只生成「把冗余副本移入回收站」的操作，不包含归档。"
+              + "想先整理目录结构，请用「跳过重复项，只做归档」。")
     }
 
     /// 摘要卡。用自适应栅格而不是固定一行 —— 窄窗口下它会自动折成两行，
@@ -206,13 +246,24 @@ struct DuplicateGroupCard: View {
     let isLastKeep: (UUID) -> Bool
     let onToggleKeep: (UUID) -> Void
     let onPreview: (UUID) -> Void
-    let onToggleKeepWhole: () -> Void
+    /// 设置整组决定。传当前已生效的那个表示取消，回到「按勾选」。
+    let onSetDisposition: (GroupDisposition) -> Void
     let onReveal: (String) -> Void
     let onOpen: (String) -> Void
 
     private var reclaimable: Int64 {
         group.reclaimableBytes(sizes: Dictionary(items.map { ($0.id, $0.fileSize) },
                                                  uniquingKeysWith: { first, _ in first }))
+    }
+
+    /// 整组决定的卡片描边。整组保留用绿、都不保留用红 ——
+    /// 「这一组被我动过」在扫视时应当一眼可见，不能只靠底部一行小字。
+    private var borderColor: Color {
+        switch group.disposition {
+        case .keepAll: return Palette.positive.opacity(0.45)
+        case .discardAll: return Palette.danger.opacity(0.5)
+        case .bySelection: return Palette.tint(for: group.kind).opacity(0.28)
+        }
     }
 
     var body: some View {
@@ -236,16 +287,18 @@ struct DuplicateGroupCard: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(group.keepWholeGroup
-                          ? Palette.positive.opacity(0.45)
-                          : Palette.tint(for: group.kind).opacity(0.28),
-                          lineWidth: group.keepWholeGroup ? 1.5 : 1))
+            .strokeBorder(borderColor,
+                          lineWidth: group.disposition == .bySelection ? 1 : 1.5))
     }
 
     private func tileMode(for item: MediaItem) -> MemberTile.Mode {
-        // 整组保留时不再区分保留/冗余，所有成员一律中性呈现
-        if group.keepWholeGroup { return .neutral }
-        return isKeep(item.id) ? .keep : .redundant
+        // 整组决定生效时不再区分保留/冗余，所有成员一律按整组的语义呈现：
+        // 整组保留 = 都留下，都不保留 = 都会被清理，逐张勾选在这一层已经没有意义。
+        switch group.disposition {
+        case .keepAll: return .neutral
+        case .discardAll: return .discard
+        case .bySelection: return isKeep(item.id) ? .keep : .redundant
+        }
     }
 
     // MARK: - 底部提示
@@ -280,28 +333,42 @@ struct DuplicateGroupCard: View {
 
     @ViewBuilder
     private var footer: some View {
-        if group.keepWholeGroup {
+        switch group.disposition {
+        case .keepAll:
             hintLine(icon: "checkmark.shield.fill",
                      tint: Palette.positive,
-                     title: "整组保留",
+                     title: "保留整组",
                      detail: "本组 \(group.memberCount) 个文件都不会被清理，仍会按整理规则归档")
-        } else if group.allMembersKept {
-            hintLine(icon: "checkmark.circle.fill",
-                     tint: Palette.positive,
-                     title: "全部 \(group.memberCount) 份都已勾选保留",
-                     detail: "本组不产生清理操作")
-        } else {
-            keptFooter
+        case .discardAll:
+            // 这是唯一一条「本组一份都不留」的路径，文案必须说清可恢复性，
+            // 否则用户会以为文件直接消失了。
+            hintLine(icon: "trash.fill",
+                     tint: Palette.danger,
+                     title: "都不保留",
+                     detail: "本组 \(group.memberCount) 个文件会全部移入系统回收站"
+                         + "（可在操作日志里撤销找回）")
+        case .bySelection:
+            if group.allMembersKept {
+                hintLine(icon: "checkmark.circle.fill",
+                         tint: Palette.positive,
+                         title: "全部 \(group.memberCount) 份都已勾选保留",
+                         detail: "本组不产生清理操作")
+            } else {
+                keptFooter
+            }
         }
     }
 
     /// 部分保留：说清「留下几份、清理几份、留下的是哪几个」
     private var keptFooter: some View {
-        let keep = group.effectiveKeepIDs
-        let keptNames = items.filter { keep.contains($0.id) }.map(\.fileName)
-        let removableCount = max(0, items.count - keptNames.count)
+        // 「清理几份」与计划生成读的是同一个属性（`redundantMemberIDs`），
+        // 所以这里显示的数字和最终生成的操作数一定一致。
+        let redundant = group.redundantMemberIDs
+        let keptNames = items.filter { !redundant.contains($0.id) }.map(\.fileName)
+        let removableCount = redundant.count
         // 只有当用户的选择恰好等于程序推荐时，理由才有意义
-        let matchesRecommendation = keptNames.count == 1 && items.first.map { keep.contains($0.id) } == true
+        let matchesRecommendation = keptNames.count == 1
+            && items.first.map { !redundant.contains($0.id) } == true
 
         return HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: "checkmark.seal.fill")
@@ -356,53 +423,100 @@ struct DuplicateGroupCard: View {
                     .fixedSize()
             }
 
-            KeepWholeToggle(isOn: group.keepWholeGroup,
+            KeepWholeToggle(disposition: group.disposition,
                             memberCount: group.memberCount,
-                            action: onToggleKeepWhole)
+                            action: onSetDisposition)
                 .fixedSize()
         }
     }
 }
 
-// MARK: - 保留整组开关
+// MARK: - 整组决定开关
 
-/// 分组卡片右上角的「保留整组」。
+/// 分组卡片右上角的两个整组决定：「都不保留」/「保留整组」。
 ///
-/// 语义是「这几张其实都有价值，只是长得像」—— 只取消清理，不影响归档，
-/// 所以提示文字要写清楚，否则用户会以为连归档也一并跳过了。
+/// 两者互斥，同时点选一个就等于取消（回到「按勾选」）。做成一对并排的按钮
+/// 而不是一个下拉或单选组，是因为这一页的主线操作就是「逐组扫一遍」：
+/// 一眼看到两个选项、一次点击做出决定，比展开菜单再选要快得多。
+///
+/// 语义边界（文案必须写清，否则最容易被误解）：
+/// - 「保留整组」= 这几张其实都有价值，只是长得像 → 只取消清理，不影响归档
+/// - 「都不保留」= 这一组我一张都不要了 → 全部移入系统回收站，可撤销找回
 private struct KeepWholeToggle: View {
-    let isOn: Bool
+    let disposition: GroupDisposition
     let memberCount: Int
-    let action: () -> Void
+    let action: (GroupDisposition) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            DispositionChip(target: .discardAll, current: disposition,
+                            onLabel: "已都不保留", offLabel: "都不保留",
+                            onSymbol: "trash.fill", offSymbol: "trash",
+                            tint: Palette.danger,
+                            help: help(for: .discardAll),
+                            action: action)
+            DispositionChip(target: .keepAll, current: disposition,
+                            onLabel: "已整组保留", offLabel: "保留整组",
+                            onSymbol: "checkmark.shield.fill", offSymbol: "checkmark.shield",
+                            tint: Palette.positive,
+                            help: help(for: .keepAll),
+                            action: action)
+        }
+    }
+
+    private func help(for target: GroupDisposition) -> String {
+        switch target {
+        case .discardAll:
+            return disposition == .discardAll
+                ? "本组 \(memberCount) 个文件全部都会被清理。点击关闭后，本组恢复为按勾选清理。"
+                : "这一组一张都不要：\(memberCount) 个文件全部移入系统回收站（可在操作日志里撤销找回）。"
+        case .keepAll:
+            return disposition == .keepAll
+                ? "本组 \(memberCount) 个文件都不会被清理。点击关闭后，本组恢复为按勾选清理。"
+                : "这 \(memberCount) 个文件都要留下 —— 本组不产生任何清理操作，"
+                    + "但仍会按整理规则归档到目标目录。"
+        case .bySelection:
+            return "按组内勾选决定保留哪些"
+        }
+    }
+}
+
+/// 单个整组决定胶囊。独立成类型是为了能各自持有悬停状态 ——
+/// 悬停变色是「这个胶囊可以点」的唯一提示，用函数生成视图就拿不到 `@State`。
+private struct DispositionChip: View {
+    let target: GroupDisposition
+    let current: GroupDisposition
+    let onLabel: String
+    let offLabel: String
+    let onSymbol: String
+    let offSymbol: String
+    let tint: Color
+    let help: String
+    let action: (GroupDisposition) -> Void
 
     @State private var hovering = false
 
+    private var isOn: Bool { current == target }
+
     var body: some View {
-        Button(action: action) {
+        Button { action(target) } label: {
             HStack(spacing: 4) {
-                Image(systemName: isOn ? "checkmark.shield.fill" : "checkmark.shield")
+                Image(systemName: isOn ? onSymbol : offSymbol)
                     .font(.system(size: 10.5, weight: .medium))
-                Text(isOn ? "已整组保留" : "保留整组")
+                Text(isOn ? onLabel : offLabel)
                     .font(.system(size: 11, weight: isOn ? .semibold : .regular))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3.5)
-            .foregroundStyle(isOn ? Color.white : Palette.positive)
-            .background(Capsule().fill(isOn
-                                       ? Palette.positive
-                                       : Palette.positive.opacity(hovering ? 0.16 : 0.08)))
-            .overlay(Capsule().strokeBorder(isOn ? .clear : Palette.positive.opacity(0.35),
+            .foregroundStyle(isOn ? Color.white : tint)
+            .background(Capsule().fill(isOn ? tint : tint.opacity(hovering ? 0.16 : 0.08)))
+            .overlay(Capsule().strokeBorder(isOn ? .clear : tint.opacity(0.35),
                                             lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        // 提示文案随多选语义一起更新 ——
-        // 原来写的是「点击可恢复为只保留其中一个」，支持多选后这个说法就不成立了。
-        .help(isOn
-              ? "本组 \(memberCount) 个文件都不会被清理。点击关闭后，本组恢复为按勾选清理。"
-              : "这 \(memberCount) 个文件都要留下 —— 本组不产生任何清理操作，"
-                + "但仍会按整理规则归档到目标目录。")
+        .help(help)
     }
 }
 
@@ -411,11 +525,12 @@ private struct KeepWholeToggle: View {
 struct MemberTile: View {
 
     /// 成员在组内的呈现方式。
-    /// 整组保留时不再区分保留与冗余，统一走 `neutral`。
+    /// 两种整组决定下都不再区分保留与冗余，统一按整组语义呈现。
     enum Mode {
         case keep       // 被勾选为保留项
         case redundant  // 会被清理的冗余副本
         case neutral    // 整组保留，不参与清理
+        case discard    // 整组都不保留，会被移入回收站
     }
 
     let item: MediaItem
@@ -433,14 +548,18 @@ struct MemberTile: View {
     @State private var hovering = false
 
     private var neutral: Bool { mode == .neutral }
+    private var discarded: Bool { mode == .discard }
+    /// 整组决定生效时逐张勾选无效，勾选框直接隐藏（而不是留一个禁用态），
+    /// 免得用户以为还能在这一层改结果。
+    private var selectionLocked: Bool { neutral || discarded }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .topTrailing) {
                 Button(action: onPreview) {
                     ThumbnailView(url: item.url, kind: item.kind, size: 112,
-                                  highlighted: kept,
-                                  dimmed: mode == .redundant)
+                                  highlighted: kept && !selectionLocked,
+                                  dimmed: mode == .redundant || discarded)
                         .frame(maxWidth: .infinity)
                         .overlay {
                             // 悬停时给出「可点击放大」的提示，否则纯缩略图看不出能点
@@ -458,13 +577,22 @@ struct MemberTile: View {
                 .buttonStyle(.plain)
                 .help("点击放大预览")
 
-                if kept && !neutral {
+                if kept && !selectionLocked {
                     Text("保留")
                         .font(.system(size: 9.5, weight: .bold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .foregroundStyle(.white)
                         .background(Capsule().fill(Palette.positive))
+                        .padding(5)
+                        .allowsHitTesting(false)
+                } else if discarded {
+                    Text("将清理")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .foregroundStyle(.white)
+                        .background(Capsule().fill(Palette.danger))
                         .padding(5)
                         .allowsHitTesting(false)
                 }
@@ -515,8 +643,8 @@ struct MemberTile: View {
 
                 Spacer(minLength: 4)
 
-                // 整组保留时「保留哪一份」已经没有意义，隐藏勾选避免误解
-                if !neutral {
+                // 整组决定生效时「保留哪一份」已经没有意义，隐藏勾选避免误解
+                if !selectionLocked {
                     KeepCheckbox(isOn: kept,
                                  enabled: !(kept && !canUncheck),
                                  action: onToggleKeep)
@@ -525,10 +653,14 @@ struct MemberTile: View {
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(kept && !neutral
-                  ? Palette.positive.opacity(0.08)
-                  : Color(nsColor: .quaternaryLabelColor).opacity(hovering ? 0.14 : 0.07)))
+            .fill(tileBackground))
         .onHover { hovering = $0 }
+    }
+
+    private var tileBackground: Color {
+        if discarded { return Palette.danger.opacity(hovering ? 0.16 : 0.09) }
+        if kept && !selectionLocked { return Palette.positive.opacity(0.08) }
+        return Color(nsColor: .quaternaryLabelColor).opacity(hovering ? 0.14 : 0.07)
     }
 }
 

@@ -36,21 +36,27 @@ enum PlanBuilder {
         var result = PlanBuildResult()
         guard filter.doesAnyWork, !items.isEmpty else { return result }
 
-        // 冗余副本索引。被设为「整组保留」的组整组跳过 ——
-        // 它只是长得像，用户已确认每张都要留，因此不产生任何清理操作。
+        // 冗余副本索引。哪些成员算冗余只有一个来源：`DuplicateGroup.redundantMemberIDs`。
+        // 「整组保留」的组它返回空集（这几张只是长得像，用户已确认每张都要留），
+        // 「都不保留」的组返回全部成员（用户显式要求一份都不留）。
+        // 这里不再自己拼条件判断整组决定 —— 界面显示的份数与计划实际清掉的份数
+        // 必须由同一个表达式算出来。
         var redundant: [UUID: DuplicateGroup] = [:]
         var keepNameByGroup: [UUID: String] = [:]
         let nameByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.fileName) })
-        for group in groups where !group.keepWholeGroup {
+        for group in groups {
+            let redundantIDs = group.redundantMemberIDs
+            guard !redundantIDs.isEmpty else { continue }
             // 保留项可以多选，理由文案里只列第一个并标出总数，避免把一长串文件名塞进一行
-            let keep = group.effectiveKeepIDs
-            let keptNames = group.memberIDs.filter { keep.contains($0) }.compactMap { nameByID[$0] }
+            let keptNames = group.memberIDs
+                .filter { !redundantIDs.contains($0) }
+                .compactMap { nameByID[$0] }
             if let first = keptNames.first {
                 keepNameByGroup[group.id] = keptNames.count > 1
                     ? "\(first) 等 \(keptNames.count) 份"
                     : first
             }
-            for member in group.memberIDs where !keep.contains(member) {
+            for member in redundantIDs {
                 redundant[member] = group
             }
         }
@@ -121,13 +127,17 @@ enum PlanBuilder {
 
             // 冗余副本 + 开启清理 → 直接移入回收站，不再归档
             if let group, filter.cleanRedundantDuplicates {
-                let keepName = keepNameByGroup[group.id] ?? "组内保留项"
+                // 「都不保留」的组没有保留项，理由必须显式说明是整组决定，
+                // 否则会退化成「同组保留『组内保留项』」这种读不通的文案
+                let reason = group.disposition == .discardAll
+                    ? "\(group.kind.displayName) · 已设为整组都不保留"
+                    : "\(group.kind.displayName)冗余副本 · 同组保留「\(keepNameByGroup[group.id] ?? "组内保留项")」"
                 operations.append(PlanOperation(
                     kind: .trash,
                     itemID: item.id,
                     sourcePath: item.path,
                     destinationPath: nil,
-                    reason: "\(group.kind.displayName)冗余副本 · 同组保留「\(keepName)」",
+                    reason: reason,
                     groupID: group.id,
                     fileSize: item.fileSize,
                     kindOfMedia: item.kind,
@@ -242,7 +252,8 @@ enum PlanBuilder {
 
         result.operations = operations
         result.summary = PlanSummary.compute(from: operations)
-        result.warnings = buildWarnings(items: items, rule: rule, filter: filter, result: result)
+        result.warnings = buildWarnings(items: items, groups: groups, rule: rule,
+                                        filter: filter, result: result)
         return result
     }
 
@@ -320,6 +331,7 @@ enum PlanBuilder {
     // MARK: - 风险提示
 
     private static func buildWarnings(items: [MediaItem],
+                                      groups: [DuplicateGroup],
                                       rule: OrganizeRule,
                                       filter: PlanFilter,
                                       result: PlanBuildResult) -> [String] {
@@ -360,6 +372,23 @@ enum PlanBuilder {
 
         if filter.cleanRedundantDuplicates && result.summary.trashCount > 0 {
             warnings.append("将把 \(result.summary.trashCount) 个重复副本移入回收站，预计释放 \(result.summary.reclaimableLabel)。")
+        }
+
+        // 「都不保留」是一条**整组**都不留的决定，风险等级高于普通冗余清理：
+        // 普通清理至少有保留项兜底，这里一份都不留，所以必须单独点名，
+        // 免得用户以为还有原件在而直接执行。
+        let discarded = groups.filter { $0.disposition == .discardAll }
+        if filter.cleanRedundantDuplicates, !discarded.isEmpty {
+            let count = discarded.reduce(0) { $0 + $1.memberCount }
+            warnings.append("有 \(discarded.count) 组被设为「都不保留」：这 \(count) 个文件会**全部**移入回收站，"
+                            + "该组不保留任何一份。可在操作日志里撤销找回。")
+        }
+
+        // 关闭清理时，重复组的「保留 / 都不保留」决定都不起作用，
+        // 冗余副本会和其它文件一样按规则归档 —— 不说清楚很容易被误读成「已经清掉了」。
+        if !filter.cleanRedundantDuplicates, !groups.isEmpty {
+            warnings.append("本次没有开启「清理重复副本」：\(groups.count) 组重复项一律保持原样，"
+                            + "组内文件会和其它文件一样按规则归档，不会被移入回收站。")
         }
 
         return warnings

@@ -361,7 +361,7 @@ enum SelfTest {
         if let victim = dedup.groups.first {
             var modified = dedup.groups
             if let index = modified.firstIndex(where: { $0.id == victim.id }) {
-                modified[index].keepWholeGroup = true
+                modified[index].disposition = .keepAll
             }
             let victimIDs = Set(victim.memberIDs)
 
@@ -413,7 +413,7 @@ enum SelfTest {
             let firstTwo = Array(base.memberIDs.prefix(2))
             multi[index].keepIDs = Set(firstTwo)
 
-            checker.equal(multi[index].keepCount, 2, "同组可以勾选两个保留项")
+            checker.equal(multi[index].effectiveKeepIDs.count, 2, "同组可以勾选两个保留项")
             checker.equal(multi[index].removableCount, base.memberCount - 2,
                           "多选后待清理数量相应减少")
             checker.equal(multi[index].reclaimableBytes(sizes: sizes),
@@ -459,6 +459,91 @@ enum SelfTest {
                           "保留集合为空时待清理数量仍是 成员数-1，而不是全部")
             checker.equal(empty.reclaimableBytes(sizes: [:]),
                           0, "空体积表下可释放空间为 0（不会误报）")
+        }
+
+        // ---------- 整组决定：都不保留 ----------
+        checker.section("整组都不保留")
+
+        // 「一张都不要」是**显式**的整组决定，与「勾选被清空」这种误操作状态必须分开：
+        // 前者放开「至少留一份」的兜底（用户明确要求都不留），
+        // 后者依旧兜底保留一份。下面两条断言成对存在，缺一条就说明护栏被拆了。
+        if let victim = dedup.groups.first(where: { $0.memberCount >= 2 }) {
+            var modified = dedup.groups
+            let index = modified.firstIndex { $0.id == victim.id }!
+            modified[index].disposition = .discardAll
+            let victimIDs = Set(victim.memberIDs)
+
+            checker.equal(modified[index].removableCount, victim.memberCount,
+                          "都不保留后整组都算待清理（\(victim.memberCount) 份）")
+            checker.check(modified[index].redundantMemberIDs == victimIDs,
+                          "都不保留要清掉的就是组内全部成员")
+
+            let sizes = Dictionary(dedup.items.map { ($0.id, $0.fileSize) },
+                                   uniquingKeysWith: { first, _ in first })
+            let beforeDiscard = DedupSummary.compute(groups: dedup.groups, sizes: sizes)
+            let afterDiscard = DedupSummary.compute(groups: modified, sizes: sizes)
+            checker.equal(afterDiscard.discardedWholeGroupCount, 1,
+                          "汇总记录了都不保留的组数")
+            checker.equal(afterDiscard.redundantFileCount,
+                          beforeDiscard.redundantFileCount + 1,
+                          "都不保留比「保留一份」多清理一份")
+            // 原先要保留的那一份体积（按 effectiveKeepIDs 取，不假设它在数组首位）
+            let previouslyKeptBytes = victim.effectiveKeepIDs
+                .reduce(Int64(0)) { $0 + (sizes[$1] ?? 0) }
+            checker.equal(afterDiscard.reclaimableBytes,
+                          beforeDiscard.reclaimableBytes + previouslyKeptBytes,
+                          "都不保留把原先要保留的那一份也算进了可释放空间")
+            checker.equal(afterDiscard.keptWholeGroupCount, 0,
+                          "整组决定互斥：都不保留不会同时被算成整组保留")
+
+            var discardFilter = PlanFilter()
+            discardFilter.cleanRedundantDuplicates = true
+            discardFilter.onlyRedundantDuplicates = true
+            let discardPlan = PlanBuilder.build(items: dedup.items, groups: modified,
+                                                rule: rule, filter: discardFilter)
+            let trashed = discardPlan.operations.filter {
+                $0.kind == .trash && victimIDs.contains($0.itemID)
+            }
+            checker.equal(trashed.count, victim.memberCount,
+                          "清理计划为整组生成回收站操作")
+            checker.check(trashed.allSatisfy { $0.reason.contains("都不保留") },
+                          "清理理由写明这是整组决定，而不是「同组保留某一份」")
+
+            let baseline = PlanBuilder.build(items: dedup.items, groups: dedup.groups,
+                                             rule: rule, filter: discardFilter)
+            let baselineOthers = baseline.operations.filter {
+                $0.kind == .trash && !victimIDs.contains($0.itemID)
+            }
+            let others = discardPlan.operations.filter {
+                $0.kind == .trash && !victimIDs.contains($0.itemID)
+            }
+            checker.equal(others.count, baselineOthers.count,
+                          "整组都不保留不影响其它组的清理结果")
+            checker.check(discardPlan.summary.trashCount > baseline.summary.trashCount,
+                          "都不保留后计划的回收站操作数确实变多")
+            checker.check(discardPlan.warnings.contains { $0.contains("都不保留") },
+                          "计划为「都不保留」单独给出风险提示")
+        } else {
+            checker.check(false, "没有可用于「都不保留」断言的 >=2 成员分组")
+        }
+
+        // ---------- 跳过重复项，只做归档 ----------
+        checker.section("跳过重复项的归档计划")
+
+        if !dedup.groups.isEmpty {
+            var archiveOnly = PlanFilter()
+            archiveOnly.archiveFiles = true
+            archiveOnly.cleanRedundantDuplicates = false
+            let archivePlan = PlanBuilder.build(items: dedup.items, groups: dedup.groups,
+                                                rule: rule, filter: archiveOnly)
+            checker.check(archivePlan.operations.allSatisfy { $0.kind != .trash },
+                          "不开启清理时不产生任何回收站操作")
+            checker.check(archivePlan.warnings.contains { $0.contains("没有开启") },
+                          "归档计划提示本次未处理重复项")
+            checker.check(!archivePlan.operations.isEmpty,
+                          "跳过重复项后计划里仍有归档操作（\(archivePlan.operations.count) 行）")
+        } else {
+            checker.check(false, "没有可用于归档计划断言的分组")
         }
 
         // ---------- 执行与撤销 ----------

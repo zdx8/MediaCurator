@@ -55,6 +55,23 @@ enum HeadlessRunner {
             }
             let shots = value(of: "--shots", in: rest).map { URL(fileURLWithPath: $0) }
             return await UIRenderCheck.run(fixtureRoot: root, shotsDirectory: shots)
+        case "widthcheck":
+            let dir = value(of: "--dir", in: rest)
+                ?? NSTemporaryDirectory() + "mediacurator-widthcheck"
+            let root = URL(fileURLWithPath: dir)
+            try? FileManager.default.removeItem(at: root)
+            guard FixtureBuilder.build(at: root) else {
+                print("素材生成失败")
+                return 1
+            }
+            let out = value(of: "--shots", in: rest)
+                ?? dir + "/width-shots"
+            let widths = value(of: "--widths", in: rest)
+                .map { $0.split(separator: ",").compactMap { Double($0) } }
+                ?? [1100, 980, 920, 860, 780, 700]
+            return await UIRenderCheck.runWidthSweep(fixtureRoot: root,
+                                                     shotsDirectory: URL(fileURLWithPath: out),
+                                                     widths: widths.map { CGFloat($0) })
         case "fixtures":
             let dir = value(of: "--dir", in: rest) ?? NSTemporaryDirectory() + "mediacurator-fixtures"
             return FixtureBuilder.build(at: URL(fileURLWithPath: dir)) ? 0 : 1
@@ -105,6 +122,9 @@ enum HeadlessRunner {
 
           MediaCurator --headless uicheck
               离屏渲染全部页面，校验绘图内容、页面差异、主题与缩略图管线
+
+          MediaCurator --headless widthcheck [--shots <目录>] [--widths 1180,920]
+              按多档宽度渲染重复项页，检查顶部区域有没有控件被挤出画布
 
           MediaCurator --headless fixtures --dir <目录>
               只生成测试素材

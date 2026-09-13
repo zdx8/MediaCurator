@@ -224,6 +224,31 @@ case "scroll":
     print("已在 (\(Int(px)), \(Int(py))) 滚动 \(lines) 行")
     exit(0)
 
+case "resize":
+    // 把窗口改到指定尺寸，用来复现「最小窗口下布局是否被裁」这类问题。
+    // 没有它就只能靠人手拖动窗口，验证不可重复。
+    guard arguments.count >= 5, let width = Double(arguments[3]),
+          let height = Double(arguments[4]) else {
+        print("用法：verify-gui resize <pid> <宽> <高>")
+        exit(2)
+    }
+    guard let window = all.first(where: { describe($0.0).role == "AXWindow" })?.0 else {
+        print("找不到窗口")
+        exit(3)
+    }
+    var size = CGSize(width: width, height: height)
+    guard let value = AXValueCreate(.cgSize, &size) else {
+        print("尺寸构造失败")
+        exit(1)
+    }
+    let status = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value)
+    print("调整结果：\(status == .success ? "成功" : "失败(\(status.rawValue))")")
+    usleep(400_000)
+    if let rect = describe(window).rect {
+        print("当前窗口：\(Int(rect.width))x\(Int(rect.height))")
+    }
+    exit(status == .success ? 0 : 1)
+
 case "bounds":
     // 窄窗口布局回归检查。
     //

@@ -37,6 +37,14 @@ enum UIRenderCheck {
         /// 画面中属于「强调色族」（蓝 > 绿 > 红且够亮）的采样点数量 ——
         /// 用来证明强调色真的被画到了画面上，而不是只存在于常量里
         var accentLikeCount: Int = 0
+        /// 顶部区域最左/最右若干像素列上的墨迹比例。
+        ///
+        /// 存在的理由：SwiftUI 遇到放不下的内容只会**默默压缩或越界绘制**，
+        /// 不报错、不崩溃，界面上就是某个按钮缺了半截（「生成清理计划」出过这个问题）。
+        /// 页面本身有 22pt 横向留白，所以正常的顶部区域在最边缘几列应当是纯背景；
+        /// 一旦边缘出现墨迹，就说明有控件被挤到了画布外面。
+        var leadingEdgeInk: Double = 0
+        var trailingEdgeInk: Double = 0
     }
 
     /// 把主色解析成具体分量。显式指定 sRGB —— SwiftUI 的 `Color(red:green:blue:)`
@@ -65,6 +73,14 @@ enum UIRenderCheck {
                 failures.append(label)
                 print("  ✗ \(label)")
             }
+        }
+
+        /// 相等断言。失败时把两个值都打出来 —— 只写「不一致」的断言
+        /// 在真的坏掉时帮不上忙，还得回去加打印重跑一遍。
+        func equal<T: Equatable>(_ actual: T, _ expected: T, _ label: String) {
+            check(actual == expected, actual == expected
+                  ? label
+                  : "\(label)（实际 \(actual)，期望 \(expected)）")
         }
     }
 
@@ -168,31 +184,95 @@ enum UIRenderCheck {
                       "重复项页随数据变化而重绘（有数据 vs 无数据字节不同）")
         print(String(format: "  · 有数据：墨迹 %.4f / 空态：墨迹 %.4f", before.inkRatio, after.inkRatio))
 
-        // 「保留整组」是新增的人工决定，它必须有可见的视觉差异，
-        // 否则用户点了之后完全看不出发生了什么。
+        // 两种整组决定都必须有可见的视觉差异，否则用户点了之后看不出发生了什么。
+        // 同时守住「顶部计数随分组变化」—— 那正是它出过问题的地方。
         state.groups = savedGroups
         if !state.groups.isEmpty {
-            state.groups[0].keepWholeGroup = false
-            let toggleOff = render(name: "整组保留-关", size: canvas, content: {
-                AnyView(DuplicatesView(state: state))
-            })
-            state.groups[0].keepWholeGroup = true
-            let toggleOn = render(name: "整组保留-开", size: canvas,
-                                  saveTo: shotsDirectory?.appendingPathComponent("2-重复项-整组保留.png"),
-                                  content: {
-                AnyView(DuplicatesView(state: state))
-            })
-            state.groups[0].keepWholeGroup = false
-
-            if let toggleOff, let toggleOn {
-                checker.check(toggleOff.digest != toggleOn.digest,
-                              "「保留整组」开关会改变分组卡片的呈现")
-                checker.check(toggleOn.inkRatio > 0.01,
-                              String(format: "整组保留状态可正常绘制（墨迹 %.4f）", toggleOn.inkRatio))
-            } else {
-                checker.check(false, "整组保留状态渲染")
+            // 用有序数组而不是字典：下面要按下标断言计数序列，
+            // 字典的遍历顺序不稳定，会让断言随机失败。
+            let variants: [(label: String, disposition: GroupDisposition, shot: String?)] = [
+                ("按勾选", .bySelection, nil),
+                ("保留整组", .keepAll, "2-重复项-整组保留.png"),
+                ("都不保留", .discardAll, "2-重复项-都不保留.png")
+            ]
+            var rendered: [String: RenderResult] = [:]
+            var chipCounts: [Int] = []
+            for variant in variants {
+                state.groups[0].disposition = variant.disposition
+                // 顶部计数读的就是界面上那枚标签用的字段
+                chipCounts.append(variant.disposition == .discardAll
+                                  ? state.dedupSummary.discardedWholeGroupCount
+                                  : state.dedupSummary.keptWholeGroupCount)
+                if let result = render(name: "整组决定-\(variant.label)", size: canvas,
+                                       saveTo: variant.shot.map {
+                                           shotsDirectory?.appendingPathComponent($0)
+                                       } ?? nil,
+                                       content: {
+                    AnyView(DuplicatesView(state: state))
+                }) {
+                    rendered[variant.label] = result
+                } else {
+                    checker.check(false, "「\(variant.label)」状态渲染")
+                }
             }
+            state.groups[0].disposition = .bySelection
+
+            checker.equal(rendered.count, variants.count, "三种整组决定都能渲染")
+            if let plain = rendered["按勾选"], let kept = rendered["保留整组"] {
+                checker.check(plain.digest != kept.digest, "「保留整组」会改变分组卡片的呈现")
+            }
+            if let plain = rendered["按勾选"], let discarded = rendered["都不保留"] {
+                checker.check(plain.digest != discarded.digest, "「都不保留」会改变分组卡片的呈现")
+            }
+            for (label, result) in rendered {
+                checker.check(result.inkRatio > 0.01,
+                              String(format: "「%@」状态可正常绘制（墨迹 %.4f）", label, result.inkRatio))
+            }
+
+            print("  · 顶部整组计数序列（按勾选/保留整组/都不保留）：\(chipCounts)")
+            checker.equal(chipCounts, [0, 1, 1],
+                          "顶部整组计数随决定切换即时更新，不读陈旧缓存")
+            checker.equal(state.dedupSummary.keptWholeGroupCount, 0,
+                          "切回按勾选后整组保留计数归零")
+            checker.equal(state.dedupSummary.discardedWholeGroupCount, 0,
+                          "切回按勾选后都不保留计数归零")
         }
+
+        // ---------- 摘要与分组始终同步 ----------
+        // 摘要曾经是手工维护的缓存：谁改了分组谁负责刷新。
+        // 「执行计划后剔除失效分组」那条路径漏了刷新，顶部「整组保留 N 组」
+        // 与摘要卡就会继续显示已经不存在（或已被清理）的分组 ——
+        // 数字看着只是差一点，用户却无从判断该信哪个。
+        // 现在由 `AppState.groups` 的属性观察器保证，这几条断言把该约束固定下来：
+        // 一旦有人去掉观察器、或绕过它直接写摘要，这里会立刻变红。
+        state.groups = savedGroups
+        checker.equal(state.dedupSummary.totalGroupCount, savedGroups.count,
+                      "赋值分组后摘要自动算出组数（\(savedGroups.count) 组）")
+        if !state.groups.isEmpty {
+            state.groups[0].disposition = .keepAll
+            checker.equal(state.dedupSummary.keptWholeGroupCount, 1,
+                          "改一个分组的整组决定，摘要立即跟上")
+            state.groups[0].disposition = .discardAll
+            checker.equal(state.dedupSummary.keptWholeGroupCount, 0,
+                          "切换整组决定后旧计数被清掉")
+            checker.equal(state.dedupSummary.discardedWholeGroupCount, 1,
+                          "切换整组决定后新计数出现")
+
+            // 执行计划后剔除失效分组：分组变少，摘要必须跟着变少
+            let keptGroupCount = savedGroups.filter { $0.kind == .exact }.count
+            state.groups = savedGroups.filter { $0.kind == .exact }
+            checker.equal(state.dedupSummary.totalGroupCount, keptGroupCount,
+                          "剔除分组后摘要不再引用已消失的分组")
+            checker.equal(state.dedupSummary.discardedWholeGroupCount, 0,
+                          "被剔除的组不再计入整组决定")
+        }
+        state.groups = []
+        checker.equal(state.dedupSummary.totalGroupCount, 0, "清空分组后摘要归零")
+        checker.equal(state.dedupSummary.discardedWholeGroupCount, 0,
+                      "清空分组后整组决定的计数一并归零")
+        // 复原：后面的放大预览 / 视频预览还要用这些分组
+        state.groups = savedGroups
+        state.groups[0].disposition = .bySelection
 
         // 放大预览浮层。同步渲染下异步解码来不及完成，所以注入一张已解好的图，
         // 否则导出的预览图只会是一个加载指示器，也验不出「图确实画上去了」。
@@ -211,7 +291,7 @@ enum UIRenderCheck {
                     AnyView(MediaPreviewOverlay(items: members,
                                                 index: .constant(0),
                                                 keepIDs: group.keepIDs,
-                                                keepWhole: group.keepWholeGroup,
+                                                disposition: group.disposition,
                                                 onToggleKeep: { _ in },
                                                 onReveal: { _ in },
                                                 onOpen: { _ in },
@@ -248,7 +328,7 @@ enum UIRenderCheck {
                 AnyView(MediaPreviewOverlay(items: videoMembers,
                                             index: .constant(0),
                                             keepIDs: videoGroup.keepIDs,
-                                            keepWhole: videoGroup.keepWholeGroup,
+                                            disposition: videoGroup.disposition,
                                             onToggleKeep: { _ in },
                                             onReveal: { _ in },
                                             onOpen: { _ in },
@@ -404,6 +484,96 @@ enum UIRenderCheck {
         }
     }
 
+    // MARK: - 窄宽度渲染
+
+    /// 窄窗口下的重复项页渲染。
+    ///
+    /// 存在的理由：「整组保留」这类提示文字曾经在缩窄窗口后被压扁 / 被裁掉，
+    /// 而固定 1120 的画布永远复现不出来。窗口最小宽度 1180、侧栏占 260，
+    /// 所以内容区实际最窄只有约 920 —— 这里就按真实可达的宽度逐档渲染导出，
+    /// 让「窄窗口长什么样」变成可以复核的实物，而不是靠肉眼在运行时碰运气。
+    static func runWidthSweep(fixtureRoot: URL, shotsDirectory: URL,
+                              widths: [CGFloat]) async -> Int32 {
+        print("影像管家 · 窄宽度渲染")
+        print(String(repeating: "─", count: 64))
+        JournalStore.overrideDirectory = fixtureRoot.appendingPathComponent("journals",
+                                                                            isDirectory: true)
+
+        let state = AppState()
+        state.settings.sourceFolders = [fixtureRoot.path]
+        state.settings.useHashCache = false
+        state.settings.minimumFileSize = 0
+        await state.performScan()
+
+        guard !state.groups.isEmpty else {
+            print("没有重复组，无法渲染")
+            return 1
+        }
+        print("样本：\(state.groups.count) 组重复")
+
+        var failures = 0
+        let variants: [(label: String, disposition: GroupDisposition)] = [
+            ("按勾选", .bySelection),
+            ("保留整组", .keepAll),
+            ("都不保留", .discardAll)
+        ]
+
+        // 判据自证：先故意渲染一个宽度远超画布的画面，边缘检测**必须**报警。
+        // 否则「没有越界」可能只是因为检测函数永远返回 0 —— 本项目已经吃过一次
+        // 「防线完全失效却全绿」的亏（见离屏渲染的字节行宽问题）。
+        if let overflow = render(name: "越界对照",
+                                 size: CGSize(width: 300, height: 200),
+                                 content: {
+            AnyView(Color.red.frame(width: 900, height: 120))
+        }) {
+            print(String(format: "  · 越界对照：边缘墨迹 %.5f / %.5f",
+                         overflow.leadingEdgeInk, overflow.trailingEdgeInk))
+            if overflow.trailingEdgeInk > 0.0005 {
+                print("  ✓ 边缘检测有效（构造的越界画面被抓到）")
+            } else {
+                print("  ✗ 边缘检测失效：构造的越界画面没被抓到，下面的「无越界」结论不可信")
+                failures += 1
+            }
+        } else {
+            print("  ✗ 越界对照渲染失败")
+            failures += 1
+        }
+
+        for width in widths {
+            for variant in variants {
+                state.groups[0].disposition = variant.disposition
+                let name = "w\(Int(width))-\(variant.label)"
+                let result = render(name: name,
+                                    size: CGSize(width: width, height: 740),
+                                    saveTo: shotsDirectory.appendingPathComponent("\(name).png"),
+                                    content: {
+                    AnyView(DuplicatesView(state: state))
+                })
+                guard let result else {
+                    print("  ✗ \(name)：渲染失败")
+                    failures += 1
+                    continue
+                }
+                // 顶部区域左右边缘不该有内容 —— 有就说明有控件被挤出了画布
+                let clipped = max(result.leadingEdgeInk, result.trailingEdgeInk)
+                let mark = clipped > 0.0005 ? "✗ 越界" : "✓"
+                print(String(format: "  %@ %@：墨迹 %.4f  边缘 %.5f / %.5f",
+                             mark, name, result.inkRatio,
+                             result.leadingEdgeInk, result.trailingEdgeInk))
+                if clipped > 0.0005 { failures += 1 }
+            }
+            state.resetKeepRecommendations()
+        }
+        state.groups[0].disposition = .bySelection
+
+        print(String(repeating: "─", count: 64))
+        print(failures == 0
+              ? "窄宽度渲染全部通过（\(widths.count) 档宽度 × \(variants.count) 种状态，顶部区域均无越界）"
+              : "窄宽度渲染有 \(failures) 项越界或失败")
+        print("渲染图已导出到：\(shotsDirectory.path)")
+        return failures == 0 ? 0 : 1
+    }
+
     /// 把视图挂进一个**永不显示**的无边框窗口再截图 —— 只建 NSHostingView 不给窗口，
     /// 像 NavigationSplitView / ScrollView 这类容器量不到尺寸，布局不会完整解析。
     static func render(name: String,
@@ -504,12 +674,47 @@ enum UIRenderCheck {
         let raw = Data(bytes: data, count: byteCount)
         let digest = SHA256.hash(data: raw).map { String(format: "%02x", $0) }.joined()
 
+        // 边缘墨迹：顶部区域（页头 + 操作行）最左/最右各 4 列。
+        // 页面有 22pt 横向留白，这几列上正常只有背景色；一旦出现与背景差异明显的像素，
+        // 就说明有控件被挤出了画布 —— SwiftUI 对这种越界不报任何错，只能靠像素判。
+        // 只看顶部这一段是因为再往下是滚动区，滚动条就贴着右边缘，会误报。
+        // `NSBitmapImageRep.colorAt` 的原点在左上，所以 y 从 0 开始就是画面顶部。
+        func edgeInk() -> (leading: Double, trailing: Double) {
+            // 位图是按显示器缩放比渲染的（外接屏 1x、内建屏 2x），
+            // 所以这里把「点」换算成像素再取样，否则检测范围会随屏幕而变。
+            let scale = size.width > 0 ? Double(width) / Double(size.width) : 1
+            let band = min(Int(140 * scale), height)
+            let columns = min(max(1, Int(4 * scale)), max(1, width / 4))
+            var leading = 0
+            var trailing = 0
+            var counted = 0
+            func value(_ x: Int, _ y: Int) -> Double? {
+                guard let raw = rep.colorAt(x: x, y: y),
+                      let color = raw.usingColorSpace(rep.colorSpace) else { return nil }
+                return 0.299 * Double(color.redComponent)
+                    + 0.587 * Double(color.greenComponent)
+                    + 0.114 * Double(color.blueComponent)
+            }
+            for y in 0..<band {
+                for offset in 0..<columns {
+                    if let v = value(offset, y), abs(v - median) > 0.04 { leading += 1 }
+                    if let v = value(width - 1 - offset, y), abs(v - median) > 0.04 { trailing += 1 }
+                    counted += 1
+                }
+            }
+            guard counted > 0 else { return (0, 0) }
+            return (Double(leading) / Double(counted), Double(trailing) / Double(counted))
+        }
+        let edges = edgeInk()
+
         return RenderResult(name: name,
                             width: width,
                             height: height,
                             luminance: average,
                             inkRatio: Double(ink) / Double(samples),
                             digest: digest,
-                            accentLikeCount: accentLike)
+                            accentLikeCount: accentLike,
+                            leadingEdgeInk: edges.leading,
+                            trailingEdgeInk: edges.trailing)
     }
 }

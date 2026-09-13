@@ -76,7 +76,17 @@ final class AppState: ObservableObject {
 
     // MARK: 扫描结果
     @Published var items: [MediaItem] = []
-    @Published var groups: [DuplicateGroup] = []
+    /// 重复分组。
+    ///
+    /// `dedupSummary` 是它的**派生数据**，所以这里挂了属性观察器：
+    /// 只要分组变了就重算摘要，不依赖各个改动点自觉调用刷新。
+    ///
+    /// 之前是「谁改了分组谁负责刷新」，结果「执行计划后剔除失效分组」那条路径漏了，
+    /// 顶部「整组保留 N 组」和摘要卡就一直显示已经不存在（或已被清理）的分组 ——
+    /// 数字看起来只是差一点，用户却无法判断该信哪个。派生数据不该靠自觉同步。
+    @Published var groups: [DuplicateGroup] = [] {
+        didSet { refreshDedupSummary() }
+    }
     @Published var dedupSummary = DedupSummary()
     @Published var failures: [ScanFailure] = []
     @Published var progress = ScanProgress()
@@ -305,8 +315,7 @@ final class AppState: ObservableObject {
 
     func recomputeDuplicates() async {
         guard !items.isEmpty else {
-            groups = []
-            dedupSummary = DedupSummary()
+            groups = []              // 属性观察器会把摘要一并清空
             return
         }
         isDedupRunning = true
@@ -315,8 +324,10 @@ final class AppState: ObservableObject {
                                                   settings: settings,
                                                   onStatus: { _ in })
         items = dedup.items
+        // 摘要不在这里赋值：它由 `groups` 的观察器重算，
+        // 检测阶段与界面改选共用 `DedupSummary.compute` 这一个算法，
+        // 分别赋值等于承认两者可能算出不同结果。
         groups = dedup.groups
-        dedupSummary = dedup.summary
         isDedupRunning = false
         if progress.phase == .analyzing {
             progress.phase = .finished
@@ -336,10 +347,15 @@ final class AppState: ObservableObject {
     ///
     /// 不允许取消最后一个勾选：那样整组都会被当成冗余副本，清理计划会把原件也移进回收站。
     /// 模型层 `effectiveKeepIDs` 还有一道兜底，这里只是不让用户走进那个状态。
+    ///
+    /// 「整组都不保留」不经过这里 —— 它是用户显式选择的整组决定（`discardAll`），
+    /// 与「勾选被清空」这种误操作状态区分开。
     func toggleKeep(groupID: UUID, memberID: UUID) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }),
               groups[index].memberIDs.contains(memberID) else { return }
         var group = groups[index]
+        // 整组决定生效时逐张勾选没有意义，先回到「按勾选」再切换
+        group.disposition = .bySelection
         if group.keepIDs.contains(memberID) {
             guard group.keepIDs.count > 1 else { return }   // 至少保留一个
             group.keepIDs.remove(memberID)
@@ -348,7 +364,6 @@ final class AppState: ObservableObject {
         }
         group.keepReason = .manual
         groups[index] = group
-        refreshDedupSummary()
     }
 
     /// 该成员是否是本组最后一个保留项 —— 是的话界面上要禁用取消勾选
@@ -360,48 +375,71 @@ final class AppState: ObservableObject {
         group.keepIDs.contains(itemID)
     }
 
-    /// 整组保留：本组不做任何清理，组内成员全部留下。
-    /// 只影响清理，不影响归档 —— 文件仍会按整理规则被移动到目标目录。
-    func setKeepWholeGroup(groupID: UUID, value: Bool) {
+    /// 设置整组决定。同一个值再点一次表示取消，回到「按勾选」——
+    /// 这样「保留整组 / 都不保留」两个按钮各自都能再次点击撤销。
+    ///
+    /// 两种整组决定都只影响清理，不影响归档：除非被清掉，
+    /// 文件仍会按整理规则被移动到目标目录。
+    func toggleDisposition(groupID: UUID, disposition: GroupDisposition) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        groups[index].keepWholeGroup = value
-        refreshDedupSummary()
+        groups[index].disposition = groups[index].disposition == disposition
+            ? .bySelection
+            : disposition
     }
 
     /// 分组上的人工决定改完之后必须重算摘要，
     /// 否则「冗余 N 个 / 可释放 X」会和实际生成的计划对不上。
+    ///
+    /// 正常情况下由 `groups` 的属性观察器自动调用；这里保留这个方法
+    /// 是给「只改了 items（文件体积）而分组没变」的场景兜底。
     func refreshDedupSummary() {
         let sizes = Dictionary(items.map { ($0.id, $0.fileSize) },
                                uniquingKeysWith: { first, _ in first })
         dedupSummary = DedupSummary.compute(groups: groups, sizes: sizes)
     }
 
-    /// 清除所有人工决定（改选的保留项 + 整组保留），恢复成程序推荐
+    /// 清除所有人工决定（改选的保留项 + 整组决定），恢复成程序推荐
     func resetKeepRecommendations() {
-        for index in groups.indices {
-            let members = groups[index].memberIDs
+        // 先整份算好再一次性写回：`groups` 的属性观察器会在赋值时重算摘要，
+        // 逐个下标改会让摘要被重算 O(组数) 次，分组多时纯属浪费。
+        var updated = groups
+        for index in updated.indices {
+            let members = updated[index].memberIDs
             let absolute = items.indices.filter { members.contains(items[$0].id) }
             guard absolute.count > 1 else { continue }
-            let treatAsIdentical = groups[index].kind == .exact
+            let treatAsIdentical = updated[index].kind == .exact
             let decision = DuplicateDetector.recommendKeep(indices: Array(absolute),
                                                           items: items,
                                                           treatAsIdentical: treatAsIdentical)
-            groups[index].keepWholeGroup = false
-            groups[index].keepIDs = [items[decision.index].id]
-            groups[index].keepReason = decision.reason
+            updated[index].disposition = .bySelection
+            updated[index].keepIDs = [items[decision.index].id]
+            updated[index].keepReason = decision.reason
             if let memberIndex = members.firstIndex(of: items[decision.index].id), memberIndex != 0 {
-                var copy = groups[index]
+                var copy = updated[index]
                 copy.memberIDs.remove(at: memberIndex)
                 copy.memberIDs.insert(items[decision.index].id, at: 0)
-                groups[index] = copy
+                updated[index] = copy
             }
         }
-        refreshDedupSummary()
+        groups = updated
     }
 
     // MARK: - 生成计划
 
-    func generatePlan() {
+    /// 跳过重复项，只按整理规则归档。
+    ///
+    /// 对应「重复副本我暂时不想动，先把目录结构整理好」这种用法。
+    /// 与重复项页的主按钮正好相反：主按钮走纯清理模式（只清副本、不归档），
+    /// 这里则把「清理重复副本」关掉、「按规则归档」打开 —— 两条路都显式写出来，
+    /// 让用户在重复项页就能选择「处理重复」还是「先不管重复」。
+    func generateArchiveOnlyPlan() {
+        filter.cleanRedundantDuplicates = false
+        filter.onlyRedundantDuplicates = false
+        filter.archiveFiles = true
+        generatePlan(skippingDuplicates: true)
+    }
+
+    func generatePlan(skippingDuplicates: Bool = false) {
         guard filter.doesAnyWork else {
             notice = AppNotice(level: .warning, title: "没有勾选任何要做的操作",
                                message: "请在「整理规则」页至少打开「按规则归档」或「清理重复副本」。")
@@ -432,9 +470,12 @@ final class AppState: ObservableObject {
             notice = AppNotice(level: .info, title: "没有需要处理的内容",
                                message: "当前规则下所有文件都已就位。")
         } else {
+            let suffix = skippingDuplicates
+                ? "，本次不处理重复副本（\(dedupSummary.totalGroupCount) 组重复项保持原样）"
+                : ""
             notice = AppNotice(level: .success, title: "计划已生成",
                                message: "共 \(built.operations.count) 行，"
-                                   + "其中待执行 \(built.summary.totalSelected) 项。")
+                                   + "其中待执行 \(built.summary.totalSelected) 项" + suffix + "。")
             page = .plan
         }
     }
@@ -538,8 +579,7 @@ final class AppState: ObservableObject {
         lastExecution = nil
         // 文件回到了原处，扫描结果里的路径全部失效，必须重新扫描才能继续操作
         items = []
-        groups = []
-        dedupSummary = DedupSummary()
+        groups = []            // 摘要随分组一并归零，见 `groups` 的观察器
         operations = []
         planSummary = PlanSummary()
         planWarnings = []
