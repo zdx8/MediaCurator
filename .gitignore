@@ -1,0 +1,10 @@
+# 构建产物 —— 发布包放在 GitHub Releases，不进仓库
+.build/
+dist/
+
+# SwiftPM
+.swiftpm/
+Package.resolved
+
+# macOS
+.DS_Store

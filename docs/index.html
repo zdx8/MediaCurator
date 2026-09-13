@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>影像管家 · 把几万张照片视频理清楚的 macOS 工具</title>
+<meta name="description" content="影像管家是一款 macOS 原生照片视频整理工具：查重（含相似图片与相似视频）、批量重命名、按拍摄时间归档。全程本地运行，扫描只读，删除只到回收站，每一步都能撤销。">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="影像管家 · macOS 照片视频整理工具">
+<meta property="og:description" content="查重、重命名、按拍摄时间归档。扫描只读，删除只到回收站，每一步都能撤销。">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="7" width="13" height="13" rx="2.5"/>
+          <path d="M8 3.5h11a2.5 2.5 0 0 1 2.5 2.5v10"/>
+        </svg>
+      </span>
+      <span class="brand-text">影像管家</span>
+    </a>
+    <nav class="site-nav">
+      <a href="#workflow">工作流</a>
+      <a href="#dedup">查重</a>
+      <a href="#safety">安全</a>
+      <a href="#download" class="nav-cta">下载</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ Hero ============ -->
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">macOS 原生应用 · 无第三方依赖 · 不上传任何文件</p>
+      <h1>把几万张照片视频<br>整理成能找得到的样子</h1>
+      <p class="lede">
+        影像管家扫描你的照片库，找出真正重复与长得像的文件，按拍摄时间和设备归入清晰的目录结构，
+        并支持批量重命名。<strong>零依赖、纯本地运行</strong>，所有改动先出计划、由你确认，
+        删除只到回收站，每一步都能撤销。
+      </p>
+
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="__RELEASE_LATEST__">
+          <span class="btn-title">下载 for Apple Silicon</span>
+          <span class="btn-sub">arm64 · 2.2 MB</span>
+        </a>
+        <a class="btn" href="__RELEASE_LATEST__">
+          <span class="btn-title">下载通用版</span>
+          <span class="btn-sub">Intel + Apple Silicon · 3.3 MB</span>
+        </a>
+      </div>
+
+      <ul class="hero-facts">
+        <li><strong>macOS 14+</strong> 起</li>
+        <li><strong>四种</strong>重复／相似判定</li>
+        <li><strong>九种</strong>目录结构模板</li>
+        <li><strong>可整体撤销</strong></li>
+      </ul>
+
+      <figure class="shot shot-hero">
+        <img src="images/overview-light.png" width="1800" height="1138" alt="影像管家主界面：左侧是五步工作流导航，右侧是重复项审阅页，显示分组的重复文件与可释放空间。">
+        <figcaption>重复项页：每组都会给出保留建议与理由，可逐组确认或整组保留</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ 它解决什么 ============ -->
+  <section class="section">
+    <div class="wrap">
+      <h2 class="section-title">照片库乱起来，通常不是因为拍得多</h2>
+      <div class="grid grid-3">
+        <article class="card">
+          <h3>同一张照片存了五份</h3>
+          <p>微信保存一次、导出一次、备份又拷一次。占的地方是其次，真正的麻烦是整理时不知道该删哪个。</p>
+        </article>
+        <article class="card">
+          <h3>截图和纯色图到处是</h3>
+          <p>纯色、白墙、天空这类「平坦画面」在感知哈希上极易互相碰撞，普通查重工具会把它们误判成同一张。</p>
+        </article>
+        <article class="card">
+          <h3>时间线对不上</h3>
+          <p>有的照片有 EXIF，有的只能从文件名猜，视频则记在容器里且时区语义还分两种。混在一起排序就全乱了。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 工作流 ============ -->
+  <section class="section section-alt" id="workflow">
+    <div class="wrap">
+      <h2 class="section-title">五步，每一步都看得见在做什么</h2>
+      <p class="section-lede">不是「一键整理」的黑盒：每一阶段的结果都摆在界面上，可以逐项检查、逐项否决。</p>
+
+      <ol class="steps">
+        <li>
+          <div class="step-text">
+            <span class="step-no">1</span>
+            <h3>扫描</h3>
+            <p>选择目录后读取拍摄时间、设备信息与内容指纹。<strong>全程只读</strong>，不改动任何文件。
+               第二次扫描会复用缓存，通常快一个数量级。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/scan.png" width="1400" height="925" alt="扫描页：选择源目录、并发线程数、文件体积下限、各类开关与扫描进度。" loading="lazy">
+          </figure>
+        </li>
+
+        <li>
+          <div class="step-text">
+            <span class="step-no">2</span>
+            <h3>重复项</h3>
+            <p>按「精确重复 / 相似图片 / 相似视频」分组，每组给出保留建议和<strong>具体理由</strong>
+               （分辨率最高、时间戳最可信、体积最大…）。点缩略图可放大比对，也可以一键<strong>整组保留</strong>。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/duplicates.png" width="1400" height="925" alt="重复项页：重复组卡片，每个成员显示分辨率、体积、拍摄时间与来源，并标注保留项。" loading="lazy">
+            <figcaption>每组的保留项由程序推荐，你可以随时改选</figcaption>
+          </figure>
+        </li>
+
+        <li>
+          <div class="step-text">
+            <span class="step-no">3</span>
+            <h3>放大比对</h3>
+            <p>看细节不用切到别的程序：滚轮缩放、拖拽平移、双击在适应窗口与 200% 之间切换，
+               方向键在组内翻页。视频直接内嵌播放器。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/preview-image.jpg" width="1400" height="925" alt="放大预览浮层：图片放大到 196%，顶部有翻页与缩放控件，底部显示分辨率、体积、拍摄时间与设备。" loading="lazy">
+          </figure>
+        </li>
+
+        <li>
+          <div class="step-text">
+            <span class="step-no">4</span>
+            <h3>整理规则</h3>
+            <p>九种目录结构模板，从「年/月/月-日/设备」到扁平的年-月-日；命名模板支持 30 个变量。
+               改模板时右边实时预览改名结果，确认无误再生成计划。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/organize.png" width="1400" height="925" alt="整理规则页：目录结构模板下拉、命名模板输入框、变量列表与实时预览。" loading="lazy">
+          </figure>
+        </li>
+
+        <li>
+          <div class="step-text">
+            <span class="step-no">5</span>
+            <h3>执行计划与撤销</h3>
+            <p>生成一份逐条的操作清单，<strong>此时还没有碰过文件系统</strong>。你可以逐项勾选、看清每一条的
+               理由，确认后才执行。执行过程写进日志，随时可以整批撤销，文件原路退回。</p>
+          </div>
+          <figure class="shot">
+            <img src="images/plan.png" width="1400" height="925" alt="执行计划页：操作清单，每行显示操作类型、源路径、目标路径与理由，并列出风险提示。" loading="lazy">
+          </figure>
+        </li>
+      </ol>
+
+      <figure class="shot shot-wide">
+        <img src="images/journal.png" width="1400" height="925" alt="操作日志页：按时间列出每次执行，显示成功、跳过、失败数量与可释放空间，并提供撤销。" loading="lazy">
+        <figcaption>每一次执行都有完整记录，可整批撤销</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============ 查重能力 ============ -->
+  <section class="section" id="dedup">
+    <div class="wrap">
+      <h2 class="section-title">查重做到「相似视频」这一层</h2>
+      <p class="section-lede">多数工具只比文件的字节。但同一段视频被转码、加了片头、重新剪过之后，字节完全不同 —— 那才是真正占地方又难分辨的部分。</p>
+
+      <div class="table-scroll">
+        <table class="compare">
+          <thead>
+            <tr><th>判定类型</th><th>怎么判</th><th>能抓到什么</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>精确重复</strong></td>
+              <td>首尾各 256 KB + 文件大小做快速签名预筛，只对碰撞的候选算完整 SHA-256</td>
+              <td>字节完全相同的副本（换过目录、改过名的同一份文件）</td>
+            </tr>
+            <tr>
+              <td><strong>相似图片</strong></td>
+              <td>DCT 感知哈希（64 位）+ 分块汉明索引，外加 4×4 平均色校验</td>
+              <td>缩小版、重新压缩、轻微裁剪过的同一张照片</td>
+            </tr>
+            <tr>
+              <td><strong>相似视频</strong></td>
+              <td>时间轴等距抽帧比对哈希序列，并校验时长差异</td>
+              <td>转码过、加过片头片尾、重新剪辑过的同一段视频</td>
+            </tr>
+            <tr>
+              <td><strong>整组保留</strong></td>
+              <td>人工判断并入计划：该组不产生任何清理操作</td>
+              <td>「这几个确实都要留，只是长得像」的情况</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <h3>为什么不用「先挑精确重复、再比对剩余文件」的常规做法</h3>
+        <p>
+          那样会同时制造两个问题：一张照片的缩小版再也找不到它的原件（原件已经被精确重复「占用」了），
+          而两条流水线都跑全量时，同一批文件又被报两次、可释放空间重复计算。
+          这里的做法是把两种关系并进<strong>同一棵并查集</strong>，最后按簇内「内容标识」的数量判定类型 ——
+          每个概念上的同一批素材只产出一个分组，既不漏也不重。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 安全模型 ============ -->
+  <section class="section section-safety" id="safety">
+    <div class="wrap">
+      <h2 class="section-title">照片不可再生，所以行为边界收得很窄</h2>
+      <p class="section-lede">这一节是这个工具和多数「清理软件」最本质的区别。</p>
+
+      <div class="grid grid-2">
+        <div class="safety-item">
+          <h3>扫描只读</h3>
+          <p>读取元数据与内容指纹，不修改、不移动、不删除任何文件。</p>
+        </div>
+        <div class="safety-item">
+          <h3>生成计划不碰文件系统</h3>
+          <p>规划阶段只做「目标路径是否已存在」这类只读探测，产出一份可以逐条审阅的清单。</p>
+        </div>
+        <div class="safety-item">
+          <h3>没有不可恢复的删除</h3>
+          <p>清理动作只有<strong>移入系统回收站</strong>。程序里不存在直接删除文件的代码路径，
+              连「覆盖同名文件」也是先把原文件移入回收站再落位。</p>
+        </div>
+        <div class="safety-item">
+          <h3>每一步都能撤销</h3>
+          <p>执行过程写入 JSONL 日志。移动与重命名原路退回，回收站里的文件从回收站取回 ——
+              包括被顶替的那份。</p>
+        </div>
+      </div>
+
+      <p class="safety-foot">扫描本地目录，不联网、不上传、不需要账号。</p>
+    </div>
+  </section>
+
+  <!-- ============ 技术细节 ============ -->
+  <section class="section section-alt">
+    <div class="wrap">
+      <h2 class="section-title">两个不太显眼、但很要紧的实现选择</h2>
+
+      <div class="grid grid-2">
+        <article class="card card-detail">
+          <h3>平坦画面必须额外拦一道</h3>
+          <p>
+            纯色、白墙、天空、截图在感知哈希上会严重碰撞 —— 实测一张纯绿图和一张近白图的
+            64 位哈希<strong>完全相同</strong>。只看哈希距离，工具就会建议你删掉其中一张。
+          </p>
+          <p>
+            所以除了哈希，还会算一份 4×4 平均色网格，颜色偏差过大时直接拒绝合并。
+            自检里有一条专门的对抗用例守着这个行为。
+          </p>
+        </article>
+
+        <article class="card card-detail">
+          <h3>视频时间不靠外部工具</h3>
+          <p>
+            直接解析 MP4 的 <code>mvhd</code> 头拿到容器时间，而不是为每个文件启动一个 ffprobe 进程 ——
+            一次导入上百个视频时，进程开销会直接变成规划阶段的瓶颈。
+          </p>
+          <p>
+            注意时间基准是 1904 年而非 1970 年，且 <code>moov</code> 可能写在文件尾部。
+            非 MP4 系容器（MKV / MTS / WMV）才退回 ffprobe。
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 下载 ============ -->
+  <section class="section" id="download">
+    <div class="wrap wrap-narrow">
+      <h2 class="section-title">下载</h2>
+
+      <div class="download-list">
+        <div class="download-row">
+          <div>
+            <h3>Apple Silicon 版 <span class="tag">推荐</span></h3>
+            <p>适用于 M1 / M2 / M3 / M4 及更新芯片的 Mac</p>
+          </div>
+          <a class="btn btn-primary" href="__RELEASE_LATEST__">影像管家-v1.0.0-arm64.zip<small>2.2 MB</small></a>
+        </div>
+        <div class="download-row">
+          <div>
+            <h3>通用版</h3>
+            <p>Intel 芯片的 Mac，或不确定自己用哪种芯片时选这个</p>
+          </div>
+          <a class="btn" href="__RELEASE_LATEST__">影像管家-v1.0.0-universal.zip<small>3.3 MB</small></a>
+        </div>
+      </div>
+
+      <p class="req">
+        <strong>系统要求</strong>macOS 14.0 或更高版本。没有第三方运行时依赖，双击即可运行。
+      </p>
+
+      <div class="notice">
+        <h3>首次打开可能提示「无法验证开发者」</h3>
+        <p>
+          当前构建使用临时签名，没有购买 Apple 开发者证书。自己下载使用没有问题，
+          但 Gatekeeper 会拦一道。三种解决办法，任选其一：
+        </p>
+        <ol>
+          <li>在「访达」里右键点击 App → 选择「打开」→ 在弹出的对话框里再点一次「打开」。</li>
+          <li>打开「系统设置 → 隐私与安全性」，在底部找到被拦截的提示，点「仍要打开」。</li>
+          <li>在终端执行：<code>xattr -dr com.apple.quarantine /Applications/MediaCurator.app</code></li>
+        </ol>
+        <p class="notice-foot">解包后应用名为 <code>MediaCurator.app</code>，显示名是「影像管家」。</p>
+      </div>
+
+      <p class="src-link">
+        源码、构建脚本与自检代码都在仓库里：<a href="__REPO_URL__">__REPO_SLUG__</a>
+      </p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p class="footer-brand">影像管家 · MediaCurator</p>
+    <p class="footer-note">
+      本地运行，不上传任何文件。清理动作只到系统回收站，且可以整体撤销。
+    </p>
+    <p class="footer-links">
+      <a href="__REPO_URL__">GitHub 仓库</a>
+      <span aria-hidden="true">·</span>
+      <a href="__RELEASE_LATEST__">最新版本</a>
+      <span aria-hidden="true">·</span>
+      <a href="__REPO_URL__/blob/main/README.md">文档</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+// 点图放大。纯原生实现，不引第三方库 —— 官网只有一个页面，没必要为此加载框架。
+(function () {
+  var overlay = null;
+  function close() {
+    if (!overlay) return;
+    overlay.remove();
+    overlay = null;
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  document.querySelectorAll('.shot img').forEach(function (img) {
+    img.addEventListener('click', function () {
+      if (overlay) return;
+      overlay = document.createElement('div');
+      overlay.className = 'lightbox';
+      var big = document.createElement('img');
+      big.src = img.currentSrc || img.src;
+      big.alt = img.alt;
+      overlay.appendChild(big);
+      overlay.addEventListener('click', close);
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', onKey);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

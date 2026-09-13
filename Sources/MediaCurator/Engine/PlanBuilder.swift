@@ -1,0 +1,362 @@
+import Foundation
+
+struct PlanBuildResult {
+    var operations: [PlanOperation] = []
+    var summary: PlanSummary = PlanSummary()
+    var warnings: [String] = []
+    /// 目标目录 → 落入文件数，用于结构预览
+    var folderCounts: [String: Int] = [:]
+    var consideredCount: Int = 0
+    var filteredOutCount: Int = 0
+
+    var hasMutatingWork: Bool {
+        operations.contains { $0.selected && $0.kind.isMutating }
+    }
+}
+
+/// 把「一堆媒体文件」翻译成「一串具体要做的文件操作」。
+///
+/// 这个阶段**完全不碰文件系统**（除了 `fileExists` 这类只读探测），
+/// 所有结果都以计划项的形式呈现给用户确认，执行由 `PlanExecutor` 负责。
+enum PlanBuilder {
+
+    private struct Prepared {
+        var item: MediaItem
+        /// 不含 {seq} 影响的目录，用于分组的稳定键
+        var stableDir: String
+        var folderComponents: [String]
+        var sequence: Int = 0
+        var redundantGroup: DuplicateGroup?
+    }
+
+    static func build(items: [MediaItem],
+                      groups: [DuplicateGroup],
+                      rule: OrganizeRule,
+                      filter: PlanFilter) -> PlanBuildResult {
+        var result = PlanBuildResult()
+        guard filter.doesAnyWork, !items.isEmpty else { return result }
+
+        // 冗余副本索引。被设为「整组保留」的组整组跳过 ——
+        // 它只是长得像，用户已确认每张都要留，因此不产生任何清理操作。
+        var redundant: [UUID: DuplicateGroup] = [:]
+        var keepNameByGroup: [UUID: String] = [:]
+        let nameByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.fileName) })
+        for group in groups where !group.keepWholeGroup {
+            if let keep = group.keepID, let name = nameByID[keep] {
+                keepNameByGroup[group.id] = name
+            }
+            for member in group.memberIDs where member != group.keepID {
+                redundant[member] = group
+            }
+        }
+
+        // ---------- 第一遍：筛选 + 计算目标目录 ----------
+        var prepared: [Prepared] = []
+        for item in items {
+            guard item.kind == .image || item.kind == .video else { continue }
+            if item.kind == .image && !filter.includeImages { result.filteredOutCount += 1; continue }
+            if item.kind == .video && !filter.includeVideos { result.filteredOutCount += 1; continue }
+            if filter.minimumPixelCount > 0, item.kind == .image,
+               item.pixelCount < filter.minimumPixelCount {
+                result.filteredOutCount += 1; continue
+            }
+            if let from = rule.dateFrom {
+                guard let date = item.capturedAt, date >= from else { result.filteredOutCount += 1; continue }
+            }
+            if let to = rule.dateTo {
+                guard let date = item.capturedAt, date <= to else { result.filteredOutCount += 1; continue }
+            }
+            if rule.minimumTimeSourceConfidence > 0,
+               item.timeSource.confidence < rule.minimumTimeSourceConfidence {
+                result.filteredOutCount += 1; continue
+            }
+            if !rule.deviceFilter.isEmpty {
+                guard rule.deviceFilter.contains(item.cameraLabel) else { result.filteredOutCount += 1; continue }
+            }
+
+            let group = redundant[item.id]
+            if filter.onlyRedundantDuplicates && group == nil {
+                result.filteredOutCount += 1; continue
+            }
+
+            let components: [String]
+            if item.capturedAt != nil {
+                let vars = TemplateRenderer.variables(for: item,
+                                                      sequence: 0,
+                                                      padding: rule.sequencePadding,
+                                                      unknownDatePlaceholder: "未识别")
+                components = TemplateRenderer.renderFolderPath(rule.folderTemplate, variables: vars)
+            } else {
+                // 时间未知就不套模板了 —— 否则会渲染出「未识别/未识别/未识别」这种层级
+                components = [PathTools.sanitizeComponent(rule.unknownDateFolder)]
+            }
+
+            let base = rule.isInPlace ? item.sourceRoot : rule.destinationRoot
+            let stableDir = ([base] + components).joined(separator: "/")
+
+            prepared.append(Prepared(item: item,
+                                     stableDir: stableDir,
+                                     folderComponents: components,
+                                     redundantGroup: group))
+        }
+
+        result.consideredCount = prepared.count
+        guard !prepared.isEmpty else { return result }
+
+        // ---------- 第二遍：按目标目录分配 {seq} 编号 ----------
+        assignSequences(&prepared, rule: rule)
+
+        // ---------- 第三遍：确定最终文件名并解决冲突 ----------
+        var reserved = Set<String>()
+        var operations: [PlanOperation] = []
+
+        for entry in prepared {
+            let item = entry.item
+            let group = entry.redundantGroup
+
+            // 冗余副本 + 开启清理 → 直接移入回收站，不再归档
+            if let group, filter.cleanRedundantDuplicates {
+                let keepName = keepNameByGroup[group.id] ?? "组内保留项"
+                operations.append(PlanOperation(
+                    kind: .trash,
+                    itemID: item.id,
+                    sourcePath: item.path,
+                    destinationPath: nil,
+                    reason: "\(group.kind.displayName)冗余副本 · 同组保留「\(keepName)」",
+                    groupID: group.id,
+                    fileSize: item.fileSize,
+                    kindOfMedia: item.kind,
+                    fileName: item.fileName))
+                continue
+            }
+
+            if !filter.archiveFiles { continue }
+
+            // 重新渲染目录（模板里可能含 {seq}）
+            let vars = TemplateRenderer.variables(for: item,
+                                                  sequence: entry.sequence,
+                                                  padding: rule.sequencePadding,
+                                                  unknownDatePlaceholder: item.capturedAt == nil
+                                                      ? rule.unknownDateFolder : "未识别")
+            let components = item.capturedAt == nil
+                ? [PathTools.sanitizeComponent(rule.unknownDateFolder)]
+                : TemplateRenderer.renderFolderPath(rule.folderTemplate, variables: vars)
+            let base = rule.isInPlace ? item.sourceRoot : rule.destinationRoot
+            let targetDir = ([base] + components).joined(separator: "/")
+
+            let ext = item.url.pathExtension
+            let stem: String
+            if rule.renameTemplate.trimmingCharacters(in: .whitespaces).isEmpty {
+                stem = item.url.deletingPathExtension().lastPathComponent
+            } else {
+                stem = TemplateRenderer.renderFileName(rule.renameTemplate, variables: vars)
+            }
+            let fileName = ext.isEmpty ? stem : "\(stem).\(ext)"
+            var desired = targetDir + "/" + fileName
+
+            // ---------- 判断结果 ----------
+            if desired == item.path {
+                // 已经在它该在的位置：不产生任何操作
+                operations.append(PlanOperation(
+                    kind: .alreadyPlaced,
+                    itemID: item.id,
+                    sourcePath: item.path,
+                    destinationPath: item.path,
+                    reason: "已在目标位置，无需处理",
+                    fileSize: item.fileSize,
+                    kindOfMedia: item.kind,
+                    fileName: item.fileName,
+                    selected: false))
+                reserved.insert(desired)
+                continue
+            }
+
+            // 目标被占用：既可能是磁盘上已存在，也可能是本次计划里前面的文件已经占位
+            let onDisk = FileManager.default.fileExists(atPath: desired)
+            let inBatch = reserved.contains(desired)
+            let taken = onDisk || inBatch
+
+            var finalPath = desired
+            var reasonSuffix = ""
+            var overwrites = false
+
+            if taken {
+                switch rule.conflictPolicy {
+                case .autoNumber:
+                    finalPath = numberedAlternative(desired, reserved: reserved)
+                    reasonSuffix = onDisk ? "（目标已存在，自动加序号）" : "（与本次计划内其他文件重名，自动加序号）"
+                case .skip:
+                    operations.append(PlanOperation(
+                        kind: .skipped,
+                        itemID: item.id,
+                        sourcePath: item.path,
+                        destinationPath: desired,
+                        reason: "目标已存在，按策略跳过",
+                        fileSize: item.fileSize,
+                        kindOfMedia: item.kind,
+                        fileName: item.fileName,
+                        selected: false))
+                    reserved.insert(desired)
+                    continue
+                case .overwrite:
+                    if onDisk && !inBatch {
+                        // 覆盖磁盘上已存在的同名文件。执行时先把原文件移入回收站再落位，
+                        // 所以文案不能写成「不可恢复」。
+                        overwrites = true
+                        reasonSuffix = "（同名文件将先移入回收站，再落位）"
+                    } else {
+                        // 与本批次内其它文件重名：两个都要落位，互相覆盖没有意义，退回加序号
+                        finalPath = numberedAlternative(desired, reserved: reserved)
+                        reasonSuffix = "（与本次计划内其他文件重名，自动加序号）"
+                    }
+                }
+            }
+
+            reserved.insert(finalPath)
+
+            let sameDirectory = (finalPath as NSString).deletingLastPathComponent
+                == (item.path as NSString).deletingLastPathComponent
+            // 复制模式下同目录改名也走复制，保持与用户所选模式语义一致
+            let kind: OperationKind = (rule.transferMode == .copy)
+                ? .copy
+                : (sameDirectory ? .rename : .move)
+
+            operations.append(PlanOperation(
+                kind: kind,
+                itemID: item.id,
+                sourcePath: item.path,
+                destinationPath: finalPath,
+                reason: buildReason(item: item, rule: rule, extra: reasonSuffix),
+                fileSize: item.fileSize,
+                kindOfMedia: item.kind,
+                fileName: item.fileName,
+                overwritesExisting: overwrites))
+
+            result.folderCounts[targetDir, default: 0] += 1
+        }
+
+        result.operations = operations
+        result.summary = PlanSummary.compute(from: operations)
+        result.warnings = buildWarnings(items: items, rule: rule, filter: filter, result: result)
+        return result
+    }
+
+    // MARK: - 序号分配
+
+    /// `{seq}` 按目标目录独立计数，并按拍摄时间先后排序 —— 这样编号顺序
+    /// 与照片实际的时间顺序一致，方便人工核对。
+    private static func assignSequences(_ prepared: inout [Prepared], rule: OrganizeRule) {
+        var groups: [String: [Int]] = [:]
+        for (index, entry) in prepared.enumerated() {
+            groups[entry.stableDir, default: []].append(index)
+        }
+        for (_, indices) in groups {
+            let ordered = indices.sorted { lhs, rhs in
+                let l = prepared[lhs].item, r = prepared[rhs].item
+                let ld = l.capturedAt ?? Date.distantFuture
+                let rd = r.capturedAt ?? Date.distantFuture
+                if ld != rd { return ld < rd }
+                if l.fileName != r.fileName { return l.fileName < r.fileName }
+                return l.path < r.path
+            }
+            for (offset, index) in ordered.enumerated() {
+                prepared[index].sequence = rule.sequenceStart + offset
+            }
+        }
+    }
+
+    // MARK: - 冲突候选名
+
+    /// 在扩展名前插入 `_n`，逐个试到不冲突为止
+    static func numberedAlternative(_ desired: String, reserved: Set<String>) -> String {
+        let url = URL(fileURLWithPath: desired)
+        let dir = url.deletingLastPathComponent().path
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+
+        var index = 1
+        while index < 100_000 {
+            let name = ext.isEmpty ? "\(base)_\(index)" : "\(base)_\(index).\(ext)"
+            let candidate = dir + "/" + name
+            if !reserved.contains(candidate), !FileManager.default.fileExists(atPath: candidate) {
+                return candidate
+            }
+            index += 1
+        }
+        let fallback = "\(base)_\(UUID().uuidString.prefix(6))" + (ext.isEmpty ? "" : ".\(ext)")
+        return dir + "/" + fallback
+    }
+
+    // MARK: - 原因描述
+
+    private static func buildReason(item: MediaItem, rule: OrganizeRule, extra: String) -> String {
+        var parts: [String] = []
+
+        let template = rule.folderTemplate
+        if template.contains("{camera}") || template.contains("{make}") || template.contains("{model}") {
+            parts.append("按设备归档：\(item.cameraLabel)")
+        } else if item.capturedAt != nil {
+            parts.append("拍摄时间 \(item.capturedAtLabel)（来源：\(item.timeSource.displayName)）")
+        } else {
+            parts.append("拍摄时间未识别")
+        }
+
+        if !rule.renameTemplate.trimmingCharacters(in: .whitespaces).isEmpty {
+            parts.append("按命名规则重命名")
+        }
+        if item.latitude != nil {
+            parts.append("含 GPS")
+        }
+        if !extra.isEmpty { parts.append(extra) }
+
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 风险提示
+
+    private static func buildWarnings(items: [MediaItem],
+                                      rule: OrganizeRule,
+                                      filter: PlanFilter,
+                                      result: PlanBuildResult) -> [String] {
+        var warnings: [String] = []
+
+        let unknown = items.filter { $0.capturedAt == nil || $0.timeSource == .none }.count
+        if unknown > 0 {
+            warnings.append("有 \(unknown) 个文件无法确定拍摄时间，将被归入「\(rule.unknownDateFolder)」目录。")
+        }
+
+        let fromFileSystem = items.filter { $0.timeSource == .fileSystem }.count
+        if fromFileSystem > 0 {
+            warnings.append("有 \(fromFileSystem) 个文件的拍摄时间只能取文件系统时间，可能与真实拍摄时间不符。")
+        }
+
+        if !rule.isInPlace {
+            for root in items.map({ $0.sourceRoot }) where PathTools.isInside(rule.destinationRoot, parent: root) {
+                warnings.append("目标目录位于源目录内部，建议下次扫描时排除该目录，否则会重复处理输出结果。")
+                break
+            }
+        }
+
+        for (label, template) in [("目录模板", rule.folderTemplate), ("命名模板", rule.renameTemplate)] {
+            let unknownVars = TemplateRenderer.unknownVariables(in: template)
+            if !unknownVars.isEmpty {
+                warnings.append("\(label)包含无法识别的变量：\(unknownVars.joined(separator: "、"))。")
+            }
+        }
+
+        if rule.conflictPolicy == .overwrite {
+            warnings.append("冲突策略为「覆盖同名文件」：目标位置的同名文件会被**移入回收站**后由新文件顶替，"
+                            + "可在操作日志里撤销找回，但请确认这确实是你想要的结果。")
+        }
+
+        if rule.transferMode == .move && result.summary.moveCount > 0 {
+            warnings.append("将移动 \(result.summary.moveCount) 个文件，涉及 \(result.summary.moveBytesLabel) 数据。")
+        }
+
+        if filter.cleanRedundantDuplicates && result.summary.trashCount > 0 {
+            warnings.append("将把 \(result.summary.trashCount) 个重复副本移入回收站，预计释放 \(result.summary.reclaimableLabel)。")
+        }
+
+        return warnings
+    }
+}
