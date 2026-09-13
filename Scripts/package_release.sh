@@ -95,3 +95,8 @@ echo "✓ 发布包就绪：$ARCHIVE"
 echo "  命名：<app名字>-v<版本>-<机型>"
 echo "  app名字 = $DISPLAY_NAME   版本 = v$VERSION   机型 = $MACHINE_TAG (本机 $HOST_MODEL / $ARCHS)"
 echo "  解包后的 app 仍是 $APP_NAME.app（bundle 名未改，改的是发布包文件名）"
+echo ""
+# GitHub 创建 Release 附件时会剥掉文件名里的非 ASCII 字符（改名接口同样如此），
+# 中文名会变成 "-v1.0.0-arm64.zip" 这种残缺样子 —— 所以上传前必须换成 ASCII 名。
+echo "  上传到 GitHub Release 时改用 ASCII 附件名（GitHub 会剥掉中文）："
+echo "    $APP_NAME-v$VERSION-$MACHINE_TAG.zip"

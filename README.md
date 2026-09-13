@@ -54,6 +54,10 @@ UNIVERSAL=1 ./Scripts/package_release.sh   # → dist/影像管家-v1.0.0-univer
 对**解压出来的 app** 重新跑签名校验、链接校验与两项自检。验打包前那份 .app 没有意义：
 打包参数写错（例如用普通 `zip` 而不是 `ditto`，签名会被破坏）只有解包后才暴露。
 
+> 上传到 GitHub Release 时**要把附件名换成 ASCII**（`MediaCurator-v1.0.0-机型.zip`）：
+> GitHub 创建附件时会剥掉文件名里的非 ASCII 字符，中文名会被削成 `-v1.0.0-arm64.zip`
+> 这种残缺样子，改名接口也救不回来。本地包名不受影响。
+
 界面按五步工作流组织：
 
 | 步骤 | 页面 | 做什么 |
