@@ -9,6 +9,11 @@ macOS 原生照片 / 视频整理工具。面向「几万到几十万个文件�
 
 全程离线，不上传任何文件。除视频抽帧兜底会调用本机 `ffmpeg`（可选）外，无第三方依赖。
 
+**下载**：[官网](https://zdx8.github.io/MediaCurator/) ·
+[Apple Silicon 版](https://github.com/zdx8/MediaCurator/releases/latest) ·
+[通用版（Intel + Apple Silicon）](https://github.com/zdx8/MediaCurator/releases/latest)
+（需要 macOS 14.0 或更高版本；首次打开若提示「无法验证开发者」，见官网的说明）
+
 ---
 
 ## 安全模型
