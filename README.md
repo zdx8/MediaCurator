@@ -307,7 +307,7 @@ APP=dist/MediaCurator.app/Contents/MacOS/MediaCurator
 # 闭环自检：素材生成 → 扫描 → 查重 → 计划 → 执行 → 撤销 → 覆盖与回退（120 项断言）
 "$APP" --headless selftest
 
-# 界面自检：离屏渲染全部页面，校验绘图内容、页面差异、主题与配色、缩略图、视频预览（91 项断言）
+# 界面自检：离屏渲染全部页面，校验绘图内容、页面差异、主题与配色、缩略图、视频预览（105 项断言）
 "$APP" --headless uicheck --shots dist/ui-preview
 
 # 窄宽度渲染：8 档宽度 × 3 种整组决定，检查顶部区域有没有控件被挤出画布
